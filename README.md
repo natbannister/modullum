@@ -1,0 +1,3 @@
+# Modullum
+
+Modullum is a custom agent running on local hardware (developing on MacBook Pro w/ M1 Pro, 16GB RAM, initially using qwen2.5-coder:7b). The agent generates requirements sets to structure task execution. Unlike traditional agents which execute tasks through high context-window feedback loops, the skills are pre-defined pipelines with internal 'nodes' (separate chat calls with pre-defined system prompts) to generate robust outputs.
