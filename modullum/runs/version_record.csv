@@ -1,2 +1,0 @@
-Timestamp,Script,Task,Serial,Model,Interview Questions,User Assumptions Iterations,User Requirements Iterations,Total Processing Time,Notes
-2026-03-13T18:50:54.735580,modullum,Create a SEIR step modelling function,2,qwen2.5-coder (7B),0,1,1,47.41,"Test run, didn't look at outputs"
