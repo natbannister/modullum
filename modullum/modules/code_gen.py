@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from prompt_toolkit import prompt
 from prompt_toolkit.styles import Style
 
-from modullum.core import Node, call_node, Stopwatch, create_run_directories
+from modullum.core import Node, call_node, Stopwatch, create_run_directories, status_spinner
 from modullum import config
 
 
@@ -206,13 +206,14 @@ def run(base_dir: Path, logger: logging.Logger, requirements: str) -> Path:
 
         test_node.add_user(f"Requirements:\n{requirements}")
         timer.start()
-        tests = call_node(
-            test_node,
-            stream=config.STREAM_CODE,
-            temperature=config.TEMPERATURE,
-            token_limit=config.TOKEN_LIMIT,
-            model=config.MODEL,
-        )
+        with status_spinner("Generating tests..."):
+            tests = call_node(
+                test_node,
+                stream=config.STREAM_CODE,
+                temperature=config.TEMPERATURE,
+                token_limit=config.TOKEN_LIMIT,
+                model=config.MODEL,
+            )
         timer.stop()
 
         tests = strip_code_fences(tests)
@@ -272,13 +273,14 @@ def run(base_dir: Path, logger: logging.Logger, requirements: str) -> Path:
         if not tests_at_fault:
 
             timer.start()
-            code = call_node(
-                code_node,
-                stream=config.STREAM_CODE,
-                temperature=config.TEMPERATURE,
-                token_limit=config.TOKEN_LIMIT,
-                model=config.MODEL,
-            )
+            with status_spinner("Generating code..."):
+                code = call_node(
+                    code_node,
+                    stream=config.STREAM_CODE,
+                    temperature=config.TEMPERATURE,
+                    token_limit=config.TOKEN_LIMIT,
+                    model=config.MODEL,
+                )
             timer.stop()
 
             code = strip_code_fences(code)

@@ -1,7 +1,7 @@
 from .nodes import Node, call_node
 from .stopwatch import Stopwatch
 from .workspace import create_run_directories, RunDirectories
-from .terminal import setup_logger
+from .terminal import setup_logger, status_spinner
 
 __all__ = [
     "Node",
@@ -10,4 +10,5 @@ __all__ = [
     "create_run_directories",
     "RunDirectories",
     "setup_logger",
+    "status_spinner"
 ]

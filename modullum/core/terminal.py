@@ -2,6 +2,17 @@ import logging
 import sys
 import time
 
+# ── Beginning of rich ─────────────────────────────────────────────────────────
+
+from rich.console import Console
+
+console = Console()
+
+def status_spinner(message: str):
+    return console.status(f"[bold]{message}", spinner="dots8")
+
+# ── End of rich ───────────────────────────────────────────────────────────────
+
 class StreamingConsoleHandler(logging.StreamHandler):
     """
     A logging handler that streams output character-by-character to the terminal,
@@ -50,3 +61,4 @@ def setup_logger(log_file: str, char_delay: float = 0.01, newline_delay: float =
     logger.addHandler(file_handler)
 
     return logger
+

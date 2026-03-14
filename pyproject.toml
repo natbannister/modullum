@@ -12,6 +12,7 @@ dependencies = [
     "pydantic>=2.0",
     "prompt_toolkit",
     "pytest",
+    "rich",
 ]
 
 [project.scripts]

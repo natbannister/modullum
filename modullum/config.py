@@ -2,7 +2,7 @@
 MODEL = "qwen2.5-coder" # Model used for all nodes
 MODEL_VARIANT = " (7B)" # Only used for specificity in records
 STREAM_USER_FACING = True # User-facing nodes stream output, Ollama says this can slow down processing
-STREAM_CODE = True
+STREAM_CODE = False
 TOKEN_LIMIT = 1500 # Cuts off node after limit reached (causes bad cutoff on JSON outputs if hit)
 TEMPERATURE = 0 # Determinism option - lower is more deterministic
 

@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from prompt_toolkit import prompt
 from prompt_toolkit.styles import Style
 
-from modullum.core import Node, call_node, Stopwatch, create_run_directories
+from modullum.core import Node, call_node, Stopwatch, create_run_directories, status_spinner
 from modullum import config
 
 # ── Prompt toolkit style ──────────────────────────────────────────────────────
@@ -155,12 +155,13 @@ def run(base_dir: Path, logger: logging.Logger) -> Path:
         interviewer_node.add_user(f"Task:\n{initial_prompt}")
 
         timer.start()
-        questions_json = call_node(
-            interviewer_node, QuestionsList,
-            temperature=config.TEMPERATURE,
-            token_limit=config.TOKEN_LIMIT,
-            model=config.MODEL,
-        )
+        with status_spinner("Just a moment..."): # Rich
+            questions_json = call_node(
+                interviewer_node, QuestionsList,
+                temperature=config.TEMPERATURE,
+                token_limit=config.TOKEN_LIMIT,
+                model=config.MODEL,
+            )
         timer.stop()
         interviewer_node.add_assistant(str(questions_json))
 
@@ -216,16 +217,18 @@ def run(base_dir: Path, logger: logging.Logger) -> Path:
 
     while not user_satisfied:
         timer.start()
-        requirements_json = call_node(
-            generator_node, RequirementsList,
-            stream=config.STREAM_USER_FACING,
-            temperature=config.TEMPERATURE,
-            token_limit=config.TOKEN_LIMIT,
-            model=config.MODEL,
-        )
+        with status_spinner("Generating requirements..."):
+            requirements_json = call_node(
+                generator_node, RequirementsList,
+                #stream=config.STREAM_USER_FACING,
+                temperature=config.TEMPERATURE,
+                token_limit=config.TOKEN_LIMIT,
+                model=config.MODEL,
+            )
         timer.stop()
         generator_node.add_assistant(str(requirements_json))
 
+        logger.info(f"\nRequirements: {requirements_json}\n")
         logger.info("\nSpecify changes to the requirements, or press Enter to accept.\n")
 
         user_feedback = ""
