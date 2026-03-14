@@ -16,5 +16,6 @@ USER_PROMPT = False # Normally True, set False if a pre-written prompt is desire
 AUTO_SKIP = True # Skips any user input stages
 INTERVIEW = False # Set to True to prompt user feedback to aid task scoping
 INTERVIEW_QUESTION_COUNT = 3 # Prompted questions limit to aid requirements generation
+ASSUMPTIONS_USER_REVIEW = False
 REQUIREMENTS_CAP = 10 # Prompted requirements limit to prevent requirements degeneration
 GROQ_REVIEW = False # [Not implemented] Set to True to enable cloud-based Groq review (larger model, better automated review)

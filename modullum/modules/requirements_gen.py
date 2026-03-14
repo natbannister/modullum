@@ -178,40 +178,41 @@ def run(base_dir: Path, logger: logging.Logger) -> Path:
         assumptions_node.add_assistant(scope_info)
 
     # ── Assumptions ───────────────────────────────────────────────────────────
-    assumptions_node.add_user(f"Task:\n{initial_prompt}")
-    assumptions_iterations = 1
-    user_satisfied = False
+    if config.ASSUMPTIONS_USER_REVIEW:
+        assumptions_node.add_user(f"Task:\n{initial_prompt}")
+        assumptions_iterations = 1
+        user_satisfied = False
 
-    while not user_satisfied:
-        timer.start()
-        assumptions = call_node(
-            assumptions_node,
-            stream=config.STREAM_USER_FACING,
-            temperature=config.TEMPERATURE,
-            token_limit=config.TOKEN_LIMIT,
-            model=config.MODEL,
-        )
-        timer.stop()
-        assumptions_node.add_assistant(assumptions)
+        while not user_satisfied:
+            timer.start()
+            assumptions = call_node(
+                assumptions_node,
+                stream=config.STREAM_USER_FACING,
+                temperature=config.TEMPERATURE,
+                token_limit=config.TOKEN_LIMIT,
+                model=config.MODEL,
+            )
+            timer.stop()
+            assumptions_node.add_assistant(assumptions)
 
-        logger.info("\nSpecify changes to the assumptions, or press Enter to accept.\n")
+            logger.info("\nSpecify changes to the assumptions, or press Enter to accept.\n")
 
-        user_feedback = ""
+            user_feedback = ""
 
-        if not config.AUTO_SKIP:
-            user_feedback = get_input()
+            if not config.AUTO_SKIP:
+                user_feedback = get_input()
 
-        if user_feedback == "":
-            user_satisfied = True
-            logger.info("Proceeding to requirements generation.\n")
-        else:
-            assumptions_node.add_user(user_feedback)
-            assumptions_iterations += 1
+            if user_feedback == "":
+                user_satisfied = True
+                logger.info("Proceeding to requirements generation.\n")
+            else:
+                assumptions_node.add_user(user_feedback)
+                assumptions_iterations += 1
+
+        generator_node.add_assistant(f"Assumptions:\n{assumptions_node.last_response()}")
 
     # ── Requirements generation ───────────────────────────────────────────────
     generator_node.add_user(f"Task:\n{initial_prompt}")
-    generator_node.add_assistant(f"Assumptions:\n{assumptions_node.last_response()}")
-
     requirements_iterations = 1
     user_satisfied = False
 
