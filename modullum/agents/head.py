@@ -1,6 +1,8 @@
 from pathlib import Path
 import logging
 
+from modullum.modules import requirements_gen, code_gen
+
 # Head agent will orchestrate module execution in sequence.
 # Extend this as you wire up more modules.
 
@@ -18,4 +20,9 @@ class HeadAgent:
         self.logger = logger
 
     def run(self):
-        raise NotImplementedError("HeadAgent.run() not yet implemented.")
+        self.logger.info("HeadAgent: starting requirements generation...\n")
+        requirements_json = requirements_gen.run(self.base_dir, self.logger)
+        #self.logger.info(f"HeadAgent: requirements written to {requirements_file}")
+        #return requirements_file
+        code_gen.run(self.base_dir, self.logger, requirements_json)
+

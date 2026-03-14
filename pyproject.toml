@@ -11,6 +11,7 @@ dependencies = [
     "ollama",
     "pydantic>=2.0",
     "prompt_toolkit",
+    "pytest",
 ]
 
 [project.scripts]

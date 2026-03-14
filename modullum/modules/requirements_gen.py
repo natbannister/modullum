@@ -167,7 +167,8 @@ def run(base_dir: Path, logger: logging.Logger) -> Path:
         logger.info("\nBefore we begin, I have a few questions.\n")
         for q in questions_json.questions:
             logger.info(f"\n{q.question}")
-            answer = get_input("Your answer").strip()
+            if not config.AUTO_SKIP:
+                answer = get_input("Your answer").strip()
             q.answer = answer if answer else "No answer provided."
 
         interview_question_count = len(questions_json.questions)
@@ -193,7 +194,11 @@ def run(base_dir: Path, logger: logging.Logger) -> Path:
         assumptions_node.add_assistant(assumptions)
 
         logger.info("\nSpecify changes to the assumptions, or press Enter to accept.\n")
-        user_feedback = get_input()
+
+        user_feedback = ""
+
+        if not config.AUTO_SKIP:
+            user_feedback = get_input()
 
         if user_feedback == "":
             user_satisfied = True
@@ -222,7 +227,11 @@ def run(base_dir: Path, logger: logging.Logger) -> Path:
         generator_node.add_assistant(str(requirements_json))
 
         logger.info("\nSpecify changes to the requirements, or press Enter to accept.\n")
-        user_feedback = get_input()
+
+        user_feedback = ""
+
+        if not config.AUTO_SKIP:
+            user_feedback = get_input()
 
         if user_feedback == "":
             user_satisfied = True
@@ -241,7 +250,9 @@ def run(base_dir: Path, logger: logging.Logger) -> Path:
     logger.info(f"Requirements saved to {requirements_file}")
 
     # ── Version record ────────────────────────────────────────────────────────
-    notes = input("Notes for this run (press Enter to skip): ")
+    notes = ""
+    if not config.AUTO_SKIP:
+        notes = get_input("Notes for this run (press Enter to skip): ")
     record = {
         "Timestamp": datetime.now().isoformat(),
         "Script": Path(sys.argv[0]).stem,
@@ -258,4 +269,4 @@ def run(base_dir: Path, logger: logging.Logger) -> Path:
         csv.DictWriter(f, fieldnames=record.keys(), extrasaction="ignore").writerow(record)
     logger.info("Version record updated.")
 
-    return requirements_file
+    return requirements_json

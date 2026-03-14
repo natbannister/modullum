@@ -21,3 +21,6 @@ venv/
 .vscode/
 .idea/
 *.swp
+
+# Local runs
+runs/

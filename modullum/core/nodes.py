@@ -67,7 +67,7 @@ def call_node(
     """Queries the model with optional JSON schema enforcement and streaming."""
     response = ollama.chat(
         model=model,
-        messages=node.messages(),          # ← was node.messages (missing call)
+        messages=node.messages(),
         format=list_schema.model_json_schema() if list_schema else None,
         stream=stream,
         options={"temperature": temperature, "num_predict": token_limit},
