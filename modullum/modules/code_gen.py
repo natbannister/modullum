@@ -155,28 +155,55 @@ DIAGNOSIS_PROMPT = (
     "You will receive a set of requirements, the code generated from those requirements, and the results from "
     "unit tests running the code. Analyse the failures and populate the 'fixes' list — one entry per failing test."
     "\nIf pytest failed during collection (0 items collected), the error is in the tests, not the code. Fix the error in the tests file."
-    "\nCheck tests conform to the requirements before assuming the code is at fault." if not config.TESTS_FEEDBACK else ""
+    "\nIf the pytest fails due to positional arguments errors, check the code function matches the pytest signature. "
+    "\nIf they do not match, use the requirements to determine which is at fault, and the fix required." if not config.TESTS_FEEDBACK else ""
+    "\nCheck tests conform to the requirements before assuming the code is at fault." if not config.TESTS_FEEDBACK else "The code function arguments must match the test signature."
     "\nOnly diagnose issues that directly cause test failures. Ignore style, formatting, and cosmetic issues."
     f"\n{schema_to_prompt_hint(Diagnosis)}"
 )
 
 # TEMPORARY REQUIREMENTS TO SPEED UP DEVELOPMENT:
 TEMP_REQUIREMENTS = """
-[REQ-001][function_signature][high][1.0] - The function must be named `seir_step` and accept arguments for current susceptible (S), exposed (E), infected (I), recovered (R) populations, transmission rate (beta), progression rate (sigma), recovery rate (gamma), and time step size (dt).
-[REQ-002][functional_behavior][high][1.0] - The function must implement the standard SEIR differential equations: dS/dt = -beta*S*I/N, dE/dt = beta*S*I/N - sigma*E, dI/dt = sigma*E - gamma*I, dR/dt = gamma*I.
-[REQ-003][functional_behavior][high][1.0] - The function must return a dictionary or object containing the updated values for S, E, I, and R after one time step.
-[REQ-004][boundary_cases][medium][1.0] - If the total population N (S+E+I+R) is zero, the function must return the current state unchanged without raising an error.
-[REQ-005][boundary_cases][high][1.0] - If any of the population compartments (S, E, I, R) are negative upon entry, the function must raise a `ValueError`.
-[REQ-006][constraints][high][1.0] - The time step `dt` must be a positive number; if non-positive, the function must raise a `ValueError`.
-[REQ-007][constraints][high][1.0] - The rates beta, sigma, and gamma must be non-negative numbers; if negative, the function must raise a `ValueError`.
-[REQ-008][functional_behavior][medium][1.0] - The implementation must use an explicit Euler method or a specified numerical integration scheme (e.g., RK4) if a parameter `method` is provided.
-[REQ-009][interface][high][1.0] - The function must accept population values as either integers or floats and return updated values of the same numeric type.
-[REQ-010][functional_behavior][medium][0.9] - If a `method` argument is provided and set to 'RK4', the function must implement the fourth-order Runge-Kutta algorithm for the SEIR system.
-[REQ-011][constraints][medium][0.8] - The function must not modify the input arguments directly if they are immutable types (e.g., tuples), but may accept mutable lists or dicts.
-[REQ-012][interface][high][1.0] - The function must include a docstring describing the SEIR model parameters, their units (implicit or explicit), and the expected return structure.
-[REQ-013][functional_behavior][medium][0.9] - The function must handle floating-point precision errors by ensuring the sum of S, E, I, R remains numerically close to N (within a small epsilon).
-[REQ-014][constraints][high][1.0] - The function must be compatible with standard scientific Python environments (e.g., NumPy arrays for vectorized inputs if applicable).
-[REQ-015][functional_behavior][medium][0.8] - If the `dt` is extremely small (below a threshold like 1e-9), the function should issue a warning or clamp the step to prevent numerical instability.
+REQ-001: Function named seir_step SHALL accept S, E, I, R, N, beta, sigma, gamma, dt as floats
+         S = susceptible population
+         E = exposed (infected but not yet infectious)
+         I = infectious population
+         R = recovered population
+         N = total population
+         beta = transmission rate
+         sigma = rate of progression from exposed to infectious (1/incubation period)
+         gamma = recovery rate
+         dt = timestep
+
+REQ-002: SHALL return tuple (new_S, new_E, new_I, new_R)
+
+REQ-003: SHALL use forward Euler integration:
+         dS = -beta * S * I / N
+         dE = beta * S * I / N - sigma * E
+         dI = sigma * E - gamma * I
+         dR = gamma * I
+         new_S = S + dS * dt
+         new_E = E + dE * dt
+         new_I = I + dI * dt
+         new_R = R + dR * dt
+
+REQ-004: SHALL raise ValueError if any of S, E, I, R are negative
+
+REQ-005: SHALL raise ValueError if N <= 0
+
+REQ-006: SHALL raise ValueError if dt <= 0
+
+REQ-007: SHALL raise ValueError if any of beta, sigma, gamma are negative
+
+REQ-008: new_S + new_E + new_I + new_R SHALL equal S + E + I + R within 1e-6
+
+REQ-009: If I = 0 and E = 0, new_S SHALL equal S, new_E SHALL equal 0,
+         new_I SHALL equal 0, new_R SHALL equal R
+         (no transmission without exposed or infectious individuals)
+
+REQ-010: For S=999, E=0, I=1, R=0, N=1000, beta=0.3, sigma=0.1, gamma=0.05, dt=1.0
+         new_E SHALL be greater than 0
+         new_I SHALL be less than I + 1e-6
 """
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -408,7 +435,7 @@ def run(base_dir: Path, logger: logging.Logger, requirements: str) -> Path:
             phase_timer.stop()
             code_generation_time = phase_timer.elapsed() - test_generation_time
             function_time = phase_timer.elapsed()
-            logger.info(f"\nAll tests passed in {code_generation_iterations} iteration(s) over {code_generation_time:.2f}s.\n")
+            logger.info(f"\nAll code passed tests in {code_generation_iterations} iteration(s) over {code_generation_time:.2f}s.\n")
             break
 
         if iteration < config.MAX_CODE_ITERATIONS - 1:
