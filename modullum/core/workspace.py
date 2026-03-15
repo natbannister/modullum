@@ -26,11 +26,11 @@ def create_run_directories(
     runs_dir = base_dir / "runs"
     runs_dir.mkdir(exist_ok=True)
 
-    existing = [p.name for p in runs_dir.iterdir() if p.is_dir() and p.name.startswith("run ")]
-    serials = [int(p.split("run ")[1]) for p in existing if p.split("run ")[1].isdigit()]
+    existing = [p.name for p in runs_dir.iterdir() if p.is_dir() and p.name.isdigit()]
+    serials = [int(p) for p in existing]
     serial = max(serials, default=0) + 1
 
-    run_dir = runs_dir / f"run {serial}"
+    run_dir = runs_dir / f"{serial}"
     artefacts_dir = run_dir / "artefacts"
     outputs_dir = run_dir / "outputs"
     run_dir.mkdir()

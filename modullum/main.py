@@ -10,7 +10,7 @@ def main():
     log_file = directories.artefacts_dir / "run.log"
     logger = setup_logger(str(log_file))
 
-    logger.info("=== modullum ===\n")
+    logger.info("\n=== modullum ===\n")
     agent = HeadAgent(BASE_DIR, logger)
     agent.run()
 

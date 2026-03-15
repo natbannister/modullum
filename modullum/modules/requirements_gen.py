@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from prompt_toolkit import prompt
 from prompt_toolkit.styles import Style
 
-from modullum.core import Node, call_node, Stopwatch, create_run_directories, status_spinner
+from modullum.core import Node, schema_to_prompt_hint, call_node, Stopwatch, status_spinner
 from modullum import config
 
 # ── Prompt toolkit style ──────────────────────────────────────────────────────
@@ -41,7 +41,7 @@ class Requirement(BaseModel):
     id: str
     type: str
     testability: str
-    status: str
+    status: float
     requirement: str
 
     def __str__(self):
@@ -67,10 +67,11 @@ Complete requirements definition set:
 [D] What is explicitly out of scope?
 
 [2] Interface
-[A] What are the inputs? (name, type, units, valid range)
-[B] What are the outputs? (name, type, structure)
-[C] How is it called? (function call, CLI, API endpoint, event)
-[D] What does it depend on that it doesn't own?
+[A] If the task is to generate a function, there MUST be a requirement to specify the function name
+[B] What are the inputs? (name, type, units, valid range)
+[C] What are the outputs? (name, type, structure)
+[D] How is it called? (function call, CLI, API endpoint, event)
+[E] What does it depend on that it doesn't own?
 
 [3] Functional behaviour
 [A] What does it do with valid inputs — the happy path?
@@ -93,20 +94,27 @@ INTERVIEWER_PROMPT = (
     f"\nUsing the complete requirements set definition provided, generate the "
     f"{config.INTERVIEW_QUESTION_COUNT} most important questions (related to the "
     "user's task) to make implications explicit."
-    "\nSort them into JSON format."
+    "\nRespond with raw JSON using the model schema. No markdown. No redundant outer brackets, either [] or {}" # qwen3.5 likes to answer in JSON markdown
     "\nDo not generate any answers to the questions."
 )
 
 REQUIREMENTS_GENERATOR_PROMPT = (
     "The user has requested a task be completed based on their prompt."
     f"\nUsing the complete requirements set definition provided, generate a list of "
-    f"requirements (STOP AFTER {config.REQUIREMENTS_CAP} REQUIREMENTS) in the form "
-    "[REQ-NNN][Type][Testability][Status]-[Requirement]."
-    "\nSort them into JSON format."
-    "\nRequirement types: interface, functional, validation, invariant, example, constraint"
-    "\nTestability types: directly_testable, structurally_testable, implicit, not_testable"
-    "\nStatus (highest to lowest confidence): confirmed, assumed, inferred"
+    f"requirements (STOP AFTER {config.REQUIREMENTS_CAP} REQUIREMENTS)."
+    f"\n{schema_to_prompt_hint(RequirementsList)}"
+    "\n status is a confidence level (0.0-1.0) that the user task expects the requirement"
 )
+
+# Pulled this all out of the above prompt to see if the schema_to_prompt_hint is sufficient
+"\nRespond with raw JSON only. No markdown."
+"\nYou must return a JSON object with a 'requirements' key containing an array of objects."
+"\nEach object must have exactly these fields:"
+"\n  - id: string, e.g. 'REQ-001'"
+"\n  - type: one of: interface, functional, validation, invariant, example, constraint"
+"\n  - testability: one of: directly_testable, structurally_testable, implicit, not_testable"
+"\n  - status: float 0.0-1.0 (confidence that this requirement is specifically needed)"
+"\n  - requirement: string describing the requirement"
 
 ASSUMPTIONS_ANALYSER_PROMPT = (
     "Given the requirements set definition provided as a reference, what assumptions "
@@ -129,14 +137,13 @@ def run(base_dir: Path, logger: logging.Logger) -> Path:
         Path to the saved requirements.txt output file.
     """
     timer = Stopwatch()
-    directories = create_run_directories(base_dir)
 
     # ── Get initial task ──────────────────────────────────────────────────────
     if config.USER_PROMPT:
         initial_prompt = get_input()
     else:
         initial_prompt = "Create a SEIR step modelling function"
-        logger.info(f"User input skipped, defaulting to: {initial_prompt}")
+        logger.info(f"User input skipped, defaulting to: {initial_prompt}\n")
 
     # ── Build nodes ───────────────────────────────────────────────────────────
     interviewer_node = Node(INTERVIEWER_PROMPT)
@@ -155,11 +162,9 @@ def run(base_dir: Path, logger: logging.Logger) -> Path:
         interviewer_node.add_user(f"Task:\n{initial_prompt}")
 
         timer.start()
-        with status_spinner("Just a moment..."): # Rich
+        with status_spinner("\nJust a moment..."): # Rich
             questions_json = call_node(
                 interviewer_node, QuestionsList,
-                temperature=config.TEMPERATURE,
-                token_limit=config.TOKEN_LIMIT,
                 model=config.MODEL,
             )
         timer.stop()
@@ -188,8 +193,6 @@ def run(base_dir: Path, logger: logging.Logger) -> Path:
             assumptions = call_node(
                 assumptions_node,
                 stream=config.STREAM_USER_FACING,
-                temperature=config.TEMPERATURE,
-                token_limit=config.TOKEN_LIMIT,
                 model=config.MODEL,
             )
             timer.stop()
@@ -218,14 +221,13 @@ def run(base_dir: Path, logger: logging.Logger) -> Path:
 
     while not user_satisfied:
         timer.start()
-        with status_spinner("Generating requirements..."):
-            requirements_json = call_node(
-                generator_node, RequirementsList,
-                #stream=config.STREAM_USER_FACING,
-                temperature=config.TEMPERATURE,
-                token_limit=config.TOKEN_LIMIT,
-                model=config.MODEL,
-            )
+        #with status_spinner("\nGenerating requirements..."): # Garbles stream if enabled
+        requirements_json = call_node(
+            generator_node, RequirementsList, 
+            think=config.REQUIREMENTS_GEN_THINK,
+            stream=config.STREAM_REQUIREMENTS_GEN,
+            model=config.MODEL,
+        )
         timer.stop()
         generator_node.add_assistant(str(requirements_json))
 
@@ -248,12 +250,15 @@ def run(base_dir: Path, logger: logging.Logger) -> Path:
             requirements_iterations += 1
 
     # ── Save output ───────────────────────────────────────────────────────────
+    """
     requirements_file = directories.outputs_dir / "requirements.txt"
     with requirements_file.open("w") as f:
         f.write(generator_node.last_response())
     logger.info(f"Requirements saved to {requirements_file}")
+    """
 
     # ── Version record ────────────────────────────────────────────────────────
+    """
     notes = ""
     if not config.AUTO_SKIP:
         notes = get_input("Notes for this run (press Enter to skip): ")
@@ -272,5 +277,6 @@ def run(base_dir: Path, logger: logging.Logger) -> Path:
     with directories.version_csv.open("a", newline="") as f:
         csv.DictWriter(f, fieldnames=record.keys(), extrasaction="ignore").writerow(record)
     logger.info("Version record updated.")
+    """
 
     return requirements_json
