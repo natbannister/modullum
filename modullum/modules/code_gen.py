@@ -29,44 +29,31 @@ def get_input(placeholder: str = "Send a message") -> str:
 # ── Pydantic schemas ──────────────────────────────────────────────────────────
 
 class FailedNode(str, Enum):
+
+    # NOTE: Currently not implemented due to previous JSON non-adherence but MAY work now JSON more strictly enforced.
+    # NOTE: If re-implementing, insert into failed_node in DiagnosedFix (below).
+
     code = "code"
     tests = "tests"
 
-    """
-    def handler(self):
-        return {
-            FailedNode.code: handle_code_failure,
-            FailedNode.tests: handle_test_failure,
-        }[self]
-    """
-    
     def __str__(self):
         return self.value
 
-""" Original diagnosis node
-class Diagnosis(BaseModel):
-    failed_node: FailedNode = Field(description="'tests' or 'code'")
-
-    diagnosis: str
-    fix: str = Field(description="Plain text description of the solution")
-
-    def __str__(self):
-        return f"Failed node: {self.failed_node}\nDiagnosis: {self.diagnosis}\nFix: {self.fix}"
-"""
 
 class DiagnosedFix(BaseModel):
-    target_test: str = Field(description="The name of the failing test")
-    failed_node: FailedNode = Field(description="'tests' or 'code'")
-    diagnosis: str
+    #target_test: str = Field(description="The name of the failing test")
+    #failed_node: FailedNode = Field(description="'tests' or 'code'")
+    failed_node: str = Field(description="'tests' or 'code'")
+    #diagnosis: str
     fix: str = Field(description="Plain text description of the fix")
-    code_snippet: str | None = None
+    code_snippet: str | None = Field(default=None, description="Optional illustrative code snippet for the fix")
 
 class Diagnosis(BaseModel):
     fixes: list[DiagnosedFix]
 
     def __str__(self):
         return "\n\n".join(
-            f"[{f.failed_node}][{f.target_test}]\n{f.diagnosis}\nFix: {f.fix}"
+            f"[{f.failed_node}]\nFix: {f.fix}"
             + (f"\n```python\n{f.code_snippet}\n```" if f.code_snippet else "")
             for f in self.fixes
         )
@@ -81,6 +68,7 @@ class TestReview(BaseModel):
     def __str__(self):
         return f"[Test: {self.test_name}][Requirement: {self.requirement_id}][Conformance: {self.conformance}]\n[Reason: {self.reason}]\n[Amendment: {self.amendment}]"
 
+
 class ManagerAction(BaseModel):
     tests_review_list: list[TestReview]
     approved: bool = Field(description="True if all tests conform to requirements, False if any amendments are needed")
@@ -88,6 +76,7 @@ class ManagerAction(BaseModel):
     def __str__(self):
         reviews = "\n".join(str(r) for r in self.tests_review_list)
         return f"{reviews}\nApproved: {self.approved}"
+
 
 class Requirement(BaseModel):
     serial: int
@@ -144,7 +133,7 @@ TEST_GENERATOR_PROMPT = (
     "\nAlways import the function using: from module import <function_name>. Generate one test per functional requirement."
     "\nNever implement or redefine the function in the test file. The function will be provided separately."
     "\nDo not generate tests that check function signatures or parameter counts."
-    #"\nIf the 'previous tests generated' section of the prompt contains pytest tests, use the feedback to amend the tests."
+    f"\nInclude a comment at the start: # Generated in Modullum by {config.MODEL}"
 )
 
 FEEDBACK_PROMPT = (
@@ -158,14 +147,16 @@ FEEDBACK_PROMPT = (
 
 CODE_GENERATOR_PROMPT = (
     "Use the requirements to generate Python code only. No explanation."
-#    "\nAny code provided in the prompt should be modified to accommodate the feedback provided in the prompt."
+    f"\nInclude a comment at the start: # Generated in Modullum by {config.MODEL}"
 )
 
 DIAGNOSIS_PROMPT = (
     "You will receive a set of requirements, the code generated from those requirements, and the results from "
-    "unit tests running the code."
+    "unit tests running the code. Analyse the failures and populate the 'fixes' list — one entry per failing test."
+    "\nIf pytest failed during collection (0 items collected), the error is in the tests, not the code. Fix the error in the tests file."
+    "\nCheck tests conform to the requirements before assuming the code is at fault." if not config.TESTS_FEEDBACK else ""
+    "\nOnly diagnose issues that directly cause test failures. Ignore style, formatting, and cosmetic issues."
     f"\n{schema_to_prompt_hint(Diagnosis)}"
-#    "\nYour output will be used to improve the code to pass the tests."
 )
 
 # TEMPORARY REQUIREMENTS TO SPEED UP DEVELOPMENT:
@@ -208,6 +199,90 @@ def run_tests(code: str, tests: str) -> dict:
         }
 
 
+def _format_fixes(fixes: list[DiagnosedFix]) -> str:
+    """Renders a list of DiagnosedFix objects into a concise prompt-ready string."""
+    return "\n\n".join(
+        f"[{f.failed_node}] {f.fix}"
+        + (f"\n```python\n{f.code_snippet}\n```" if f.code_snippet else "")
+        for f in fixes
+    )
+
+
+def _apply_code_fixes(
+    code: str,
+    requirements: str,
+    fixes: list[DiagnosedFix],
+) -> tuple[Node, str]:
+    """
+    Spawns a fresh code repair node, calls it, and returns (node, repaired_code).
+
+    The node is given only what it needs: the requirements, the current code,
+    and the specific fixes to apply — no accumulated diagnosis history.
+    """
+    repair_node = Node(CODE_GENERATOR_PROMPT)
+    repair_node.add_user(
+        f"Requirements:\n{requirements}\n\n"
+        f"Current code:\n{code}\n\n"
+        f"Apply the following fixes, do NOT change any other code:\n{_format_fixes(fixes)}"
+    )
+    repaired = call_node(repair_node, stream=config.STREAM_CODE)
+    repair_node.add_assistant(repaired)
+    return repair_node, repaired
+
+
+def _apply_test_fixes(
+    tests: str,
+    requirements: str,
+    fixes: list[DiagnosedFix],
+) -> tuple[Node, str]:
+    """
+    Spawns a fresh test repair node, calls it, and returns (node, repaired_tests).
+
+    The node is given only what it needs: the requirements, the current tests,
+    and the specific fixes to apply — no accumulated diagnosis history.
+    """
+    repair_node = Node(TEST_GENERATOR_PROMPT)
+    repair_node.add_user(
+        f"Requirements:\n{requirements}\n\n"
+        f"Current tests:\n{tests}\n\n"
+        f"Apply the following fixes, do NOT change any other code:\n{_format_fixes(fixes)}"
+    )
+    repaired = call_node(repair_node, stream=config.STREAM_CODE)
+    repair_node.add_assistant(repaired)
+    return repair_node, repaired
+
+
+def _dispatch_fixes(
+    diagnosis: Diagnosis,
+    code: str,
+    tests: str,
+    requirements: str,
+    logger: logging.Logger,
+) -> tuple[str, str]:
+    """
+    Partitions fixes by target node, spawns a lightweight repair node for each
+    affected side, and returns the (possibly updated) code and tests.
+
+    Both sides can be repaired in the same iteration if the diagnosis targets both.
+    """
+    # Revert to using FailedNode in the future if the code/tests flagging doesn't work
+    code_fixes = [f for f in diagnosis.fixes if f.failed_node == "code"]
+    test_fixes = [f for f in diagnosis.fixes if f.failed_node == "tests"]
+
+    if code_fixes:
+        logger.info(f"\n  Applying {len(code_fixes)} code fix(es)...")
+        _, code = _apply_code_fixes(code, requirements, code_fixes)
+
+    if test_fixes:
+        logger.info(f"\n  Applying {len(test_fixes)} test fix(es)...")
+        _, tests = _apply_test_fixes(tests, requirements, test_fixes)
+
+    if not code_fixes and not test_fixes:
+        logger.info("  Diagnosis produced no actionable fixes.")
+
+    return code, tests
+
+
 # ── Main entry point ──────────────────────────────────────────────────────────
 
 def run(base_dir: Path, logger: logging.Logger, requirements: str) -> Path:
@@ -242,14 +317,14 @@ def run(base_dir: Path, logger: logging.Logger, requirements: str) -> Path:
     phase_timer.start()
 
     # ====================== REMOVE this once pipeline works
-    requirements=TEMP_REQUIREMENTS
+    requirements = TEMP_REQUIREMENTS
 
     for iteration in range(config.MAX_TEST_ITERATIONS):
 
         # Increase token limit with each iteration so it doesn't truncate on subsequent cycles
-        token_limit = config.TOKEN_LIMIT + (test_generation_iterations * config.TOKEN_LIMIT)
+        token_limit = config.BIG_TOKEN_LIMIT + (test_generation_iterations * config.TOKEN_LIMIT)
 
-        logger.info(f"--- Test Iteration {iteration + 1} ---")
+        logger.info(f"\n--- Test Iteration {iteration + 1} ---\n")
 
         if last_tests:
             test_node.add_assistant(f"Previous tests generated:\n{last_tests}")
@@ -257,7 +332,6 @@ def run(base_dir: Path, logger: logging.Logger, requirements: str) -> Path:
 
         test_node.add_user(f"Requirements:\n{requirements}")
         timer.start()
-        #with status_spinner("Generating tests..."):
         tests = call_node(
             test_node,
             stream=config.STREAM_CODE,
@@ -266,12 +340,9 @@ def run(base_dir: Path, logger: logging.Logger, requirements: str) -> Path:
         timer.stop()
 
         if tests:
-            #tests_file = directories.artefacts_dir / f"tests_{iteration + 1}.py"
-            #tests_file.write_text(tests)
             last_tests = tests
             logger.info("\nTests generated.")
             test_generation_iterations = iteration + 1
-            #logger.info(f" Saved to {tests_file.name}.")
 
         if config.TESTS_FEEDBACK:
             feedback_node.add_user(f"Requirements:\n{requirements}\nTests:\n{tests}")
@@ -287,13 +358,6 @@ def run(base_dir: Path, logger: logging.Logger, requirements: str) -> Path:
             if test_feedback.approved:
                 criteria_approved = True
                 break
-
-            """"
-            if test_feedback:
-                feedback_file = directories.artefacts_dir / f"test_feedback_{iteration + 1}.txt"
-                feedback_file.write_text(test_feedback)
-                logger.info(f"Test feedback saved to {feedback_file.name}.")
-            """
         else:
             criteria_approved = True
             break
@@ -307,73 +371,55 @@ def run(base_dir: Path, logger: logging.Logger, requirements: str) -> Path:
         logger.info(f"\nMax test iterations reached ({test_generation_iterations}) over {test_generation_time:.2f}s — tests may not be fully validated.\n")
 
     # ── Code generation ───────────────────────────────────────────────────────
-    #logger.info("Generating code...\n")
+
+    logger.info("\nGenerating code...\n")
 
     code = ""
-    diagnosis = ""
     passed = False
     code_generation_iterations = 0
-    tests_at_fault = False # TODO: Fix this lazy implementation later (make proper routing)
 
-    code_node.add_user(f"Requirements:\n{requirements}") # Must be at least one user entry for call_node()
+    code_node.add_user(f"Requirements:\n{requirements}")
 
     phase_timer.start()
 
     for iteration in range(config.MAX_CODE_ITERATIONS):
-        logger.info(f"--- Code Iteration {iteration + 1} ---")
-        if not tests_at_fault:
+
+        if code_generation_iterations == 0:
 
             timer.start()
-            #with status_spinner("Generating code..."):
-            code = call_node(
-                code_node,
-                stream=config.STREAM_CODE,
-            )
+            code = call_node(code_node, stream=config.STREAM_CODE)
             timer.stop()
+            code_node.add_assistant(code)
 
-            logger.info("\nCode generated. Running tests...")
+        logger.info(f"\n--- Test Run Iteration {iteration + 1} ---\n")
 
         results = run_tests(code, tests)
         code_generation_iterations = iteration + 1
+
+        logger.info(str(results["output"]))
 
         if results["passed"]:
             passed = True
             phase_timer.stop()
             code_generation_time = phase_timer.elapsed() - test_generation_time
             function_time = phase_timer.elapsed()
-
             logger.info(f"\nAll tests passed in {code_generation_iterations} iteration(s) over {code_generation_time:.2f}s.\n")
-
-            """
-            output_code = directories.outputs_dir / "output_code.py"
-            output_tests = directories.outputs_dir / "output_tests.py"
-            output_code.write_text(code)
-            output_tests.write_text(tests)
-            logger.info(f"Code saved to {output_code.name} and {output_tests.name}.")
-
-            _record_run(directories, requirements, code_generation_iterations,
-                        test_generation_iterations, test_generation_time,
-                        code_generation_time, function_time, timer.elapsed(), passed, logger)
-
-            return output_code
-            """
-        """
-        if code:
-            code_file = directories.artefacts_dir / f"code_{iteration + 1}.py"
-            code_file.write_text(code)
-            logger.info(f"Tests failed. Code saved to {code_file.name}.")
-        """
+            break
 
         if iteration < config.MAX_CODE_ITERATIONS - 1:
-            logger.info("\nAnalysing test failure...")
+            logger.info("\nAnalysing failures...")
+
+            # Start node fresh
+            diagnosis_node = Node(DIAGNOSIS_PROMPT)
+
+            # If test check skipped, give the diagnosis node requirements to refer to
+            prefix = f"Requirements:\n{requirements}\n\n" if not config.TESTS_FEEDBACK else ""
 
             diagnosis_node.add_user(
-                f"Requirements:\n{requirements}\n\n"
+                f"{prefix}"
                 f"Code:\n{code}\n\n"
-                f"Failures:\n{results['output']}\n\n"
-                "\nDiagnose the failure and suggest the fix" \
-                "\nAnswer in JSON format. "
-                #"\nIf the function code was to blame, specify 'code' in the failed node field."
+                f"Test output:\n{results['output']}\n\n"
+                "Populate the 'fixes' list for each failing test. Answer in JSON format."
             )
             timer.start()
             diagnosis = call_node(
@@ -382,41 +428,19 @@ def run(base_dir: Path, logger: logging.Logger, requirements: str) -> Path:
                 stream=config.STREAM_JSON,
             )
             timer.stop()
+            diagnosis_node.add_assistant(str(diagnosis))
 
-            logger.info(str(diagnosis.fixes))
+            logger.info(f"\n{diagnosis}")
 
-            if diagnosis.failed_node == "tests": # TODO: Proper node flow control. This just spawns a fresh test node.
-                tests_at_fault = True
-                test_node = Node(TEST_GENERATOR_PROMPT)
-                test_node.add_assistant(f"Previously generated tests: {tests}")
-                test_node.add_user(f"Amend tests based on the following feedback: {diagnosis.fixes}")
-                tests = call_node(test_node, stream=config.STREAM_CODE)
-            elif diagnosis.failed_node == "code":
-                tests_at_fault = False
-                code_node.add_assistant(f"\n\nPrevious code submitted:\n{code}")
-                code_node.add_user(f"Amend code based on the following feedback: {diagnosis.fixes}")
-            else:
-                logger.info("\nFailure not attributed to either tests or code.")
+            # Route each fix to a fresh, lightweight repair node for the appropriate side.
+            code, tests = _dispatch_fixes(diagnosis, code, tests, requirements, logger)
 
-            """
-            if diagnosis:
-                diagnosis_file = directories.artefacts_dir / f"diagnosis_{iteration + 1}.txt"
-                diagnosis_file.write_text(str(diagnosis))
-                logger.info(f"Diagnosis saved to {diagnosis_file.name}.")
-            """
+    else:
+        phase_timer.stop()
+        code_generation_time = phase_timer.elapsed() - test_generation_time
+        function_time = phase_timer.elapsed()
+        logger.info(f"\nMax code iterations ({code_generation_iterations}) reached in {code_generation_time:.2f}s — code did not pass tests.\n")
 
-    phase_timer.stop()
-    code_generation_time = phase_timer.elapsed() - test_generation_time
-    function_time = phase_timer.elapsed()
-
-    logger.info(f"\nMax code iterations ({code_generation_iterations}) reached in {code_generation_time:.2f}s — code did not pass tests.\n")
-    """
-    _record_run(directories, requirements, code_generation_iterations,
-                test_generation_iterations, test_generation_time,
-                code_generation_time, function_time, timer.elapsed(), passed, logger)
-
-    return directories.outputs_dir / "output_code.py"
-    """
     return code, tests
 
 

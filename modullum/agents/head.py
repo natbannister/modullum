@@ -24,7 +24,7 @@ class HeadAgent:
 
         directories = create_run_directories(self.base_dir)
 
-        self.logger.info("HeadAgent: starting requirements generation...\n")
+        self.logger.info("\nLet's get started.\n")
         # ========== UNBLANK ONCE WORKING
         #requirements_json = requirements_gen.run(self.base_dir, self.logger)
         #scope_manager.run(self.logger, requirements_json)

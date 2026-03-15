@@ -10,6 +10,7 @@ STREAM_USER_FACING = True # User-facing nodes stream output
 STREAM_CODE = True
 STREAM_JSON = True
 TOKEN_LIMIT = 2048 # Cuts off node after limit reached (causes bad cutoff on JSON outputs if hit)
+BIG_TOKEN_LIMIT = 8192 # Used on more intensive nodes
 THINKING_TOKEN_LIMIT = None  #8192 # Default token limit for thinking
 TEMPERATURE = 0 # Determinism option - lower is more deterministic
 

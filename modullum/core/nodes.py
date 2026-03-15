@@ -30,7 +30,9 @@ class Node:
         return self.history[-1]["content"] if self.history else None
 
 def strip_code_fences(text: str) -> str:
-    match = re.search(r'```(?:python)?\n(.*?)```', text, re.DOTALL)
+    """Strips markdown fences for python and json outputs."""
+    # NOTE: '|json' can be removed, this function is not sufficient for JSON enforcement.
+    match = re.search(r'```(?:python|json)?\n(.*?)```', text, re.DOTALL)
     return match.group(1) if match else text
 
 def flatten_schema(schema: dict) -> dict:
@@ -47,11 +49,10 @@ def flatten_schema(schema: dict) -> dict:
 
         # Resolve $ref
         if "$ref" in node:
-            ref_path = node["$ref"]  # e.g. "#/$defs/Requirement"
-            ref_key = ref_path.split("/")[-1]
-            if ref_key in defs:
-                return resolve(defs[ref_key])
-            return node  # unresolvable ref, leave as-is
+            ref_key = node["$ref"].split("/")[-1]
+            resolved = resolve(defs[ref_key]) if ref_key in defs else node
+            extras = {k: v for k, v in node.items() if k != "$ref"}
+            return {**resolved, **extras} if extras else resolved
 
         result = {}
         for key, value in node.items():
@@ -74,32 +75,73 @@ def flatten_schema(schema: dict) -> dict:
 
     return resolve(schema)
 
-def schema_to_prompt_hint(schema: dict) -> str:
+def schema_to_prompt_hint(schema: dict, indent: int = 0) -> str:
     """
-    Returns a text description of a flattened JSON schema.
-    Required to aid structured output enforcement in 'looser' models.
+    Recursively renders a flattened JSON schema into a prompt-ready description.
+    Handles nested objects, nullable fields, enums, and arrays of objects.
     """
     if hasattr(schema, "model_json_schema"):
         schema = schema.model_json_schema()
 
     flat = flatten_schema(schema)
     props = flat.get("properties", {})
+    pad = "    " * indent
+    lines = []
 
-    lines = ["Respond with a JSON object with these exact fields:"]
+    if indent == 0:
+        lines.append("You MUST under ALL circumstances output a JSON object, with NO markdown fences, with these EXACT fields:")
+
     for name, field in props.items():
-        field_type = field.get("type", "")
+        field_type, nullable = _resolve_field_type(field)
+        null_suffix = " or null" if nullable else ""
         desc = field.get("description", "")
-        if field_type == "array":
-            item_props = field.get("items", {}).get("properties", {})
-            lines.append(f"- {name}: array of objects with fields:")
-            for fname, fval in item_props.items():
-                fdesc = fval.get("description", "")
-                lines.append(f"    - {fname}: {fval.get('type', 'string')}{f' — {fdesc}' if fdesc else ''}")
+        desc_suffix = f" — {desc}" if desc else ""
+
+        if field_type == "object":
+            lines.append(f"{pad}- {name}: object{null_suffix}{desc_suffix}")
+            lines.append(_render_object(field, indent + 1))
+
+        elif field_type == "array":
+            items = field.get("items", {})
+            item_type, _ = _resolve_field_type(items)
+            if item_type == "object":
+                lines.append(f"{pad}- {name}: array of objects{null_suffix}{desc_suffix}, each with fields:")
+                lines.append(_render_object(items, indent + 1))
+            else:
+                lines.append(f"{pad}- {name}: array of {item_type or 'any'}{null_suffix}{desc_suffix}")
+
+        elif field.get("enum"):
+            enum_vals = ", ".join(f'"{v}"' for v in field["enum"])
+            lines.append(f"{pad}- {name}: one of [{enum_vals}]{null_suffix}{desc_suffix}")
+
         else:
-            lines.append(f"- {name}: {field_type}{f' — {desc}' if desc else ''}")
-    lines.append("Output must contain exactly these fields and no others.")
+            lines.append(f"{pad}- {name}: {field_type or 'any'}{null_suffix}{desc_suffix}")
+
+    if indent == 0:
+        lines.append("Output must contain exactly these fields and no others.")
 
     return "\n".join(lines)
+
+def _resolve_field_type(field: dict) -> tuple[str, bool]:
+    """
+    Returns (type_string, is_nullable) for a field, handling anyOf/oneOf patterns
+    produced by Optional[X] and Union[X, None].
+    """
+    if "anyOf" in field or "oneOf" in field:
+        variants = field.get("anyOf") or field.get("oneOf")
+        non_null = [v for v in variants if v.get("type") != "null"]
+        nullable = len(non_null) < len(variants)
+        primary = non_null[0] if non_null else {}
+        # Merge back so callers can inspect items/properties/enum on the resolved type
+        merged = {**primary, **{k: v for k, v in field.items() if k not in ("anyOf", "oneOf")}}
+        field_type, _ = _resolve_field_type(merged)
+        return field_type, nullable
+
+    return field.get("type", ""), False
+
+def _render_object(field: dict, indent: int) -> str:
+    """Renders the properties of an object field recursively."""
+    return schema_to_prompt_hint(field, indent=indent)
 
 def salvage_truncated_json(content: str) -> str:
     """Closes unclosed JSON structures, discarding the last incomplete entry."""
@@ -185,7 +227,7 @@ def call_node(
     else:
         content = response.message.content
 
-    #content = strip_code_fences(content) # TODO: Might want to remove this and the method and put it back in the code gen module
+    content = strip_code_fences(content) # TODO: Might want to remove this and the method and put it back in the code gen module
 
     if not schema:
         return content
