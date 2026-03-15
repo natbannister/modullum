@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 
 from pydantic import BaseModel
+from pydantic import Field
 from prompt_toolkit import prompt
 from prompt_toolkit.styles import Style
 
@@ -38,14 +39,13 @@ class QuestionsList(BaseModel):
 
 
 class Requirement(BaseModel):
-    id: str
-    type: str
-    testability: str
-    status: float
+    id: str = Field(description="REQ-NNN")
+    type: str = Field(description="Interface, Functional, Validation, Invariant, Example, Constraint")
+    testability: str = Field(description="'Testable' or 'Implicit'")
     requirement: str
 
     def __str__(self):
-        return f"[{self.id}][{self.type}][{self.testability}][{self.status}] - {self.requirement}"
+        return f"[{self.id}][{self.type}][{self.testability}] - {self.requirement}"
 
 
 class RequirementsList(BaseModel):
@@ -103,18 +103,7 @@ REQUIREMENTS_GENERATOR_PROMPT = (
     f"\nUsing the complete requirements set definition provided, generate a list of "
     f"requirements (STOP AFTER {config.REQUIREMENTS_CAP} REQUIREMENTS)."
     f"\n{schema_to_prompt_hint(RequirementsList)}"
-    "\n status is a confidence level (0.0-1.0) that the user task expects the requirement"
 )
-
-# Pulled this all out of the above prompt to see if the schema_to_prompt_hint is sufficient
-"\nRespond with raw JSON only. No markdown."
-"\nYou must return a JSON object with a 'requirements' key containing an array of objects."
-"\nEach object must have exactly these fields:"
-"\n  - id: string, e.g. 'REQ-001'"
-"\n  - type: one of: interface, functional, validation, invariant, example, constraint"
-"\n  - testability: one of: directly_testable, structurally_testable, implicit, not_testable"
-"\n  - status: float 0.0-1.0 (confidence that this requirement is specifically needed)"
-"\n  - requirement: string describing the requirement"
 
 ASSUMPTIONS_ANALYSER_PROMPT = (
     "Given the requirements set definition provided as a reference, what assumptions "
