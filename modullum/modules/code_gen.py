@@ -35,6 +35,7 @@ class FailedNode(str, Enum):
 
     code = "code"
     tests = "tests"
+    missing_dependency = "missing_dependency" # If a test requires a dependency that's not installed
 
     def __str__(self):
         return self.value
@@ -42,8 +43,8 @@ class FailedNode(str, Enum):
 
 class DiagnosedFix(BaseModel):
     #target_test: str = Field(description="The name of the failing test")
-    #failed_node: FailedNode = Field(description="'tests' or 'code'")
-    failed_node: str = Field(description="'tests' or 'code'")
+    failed_node: FailedNode #= Field(description="'tests' or 'code'")
+    #failed_node: str = Field(description="'tests' or 'code'")
     #diagnosis: str
     fix: str = Field(description="Plain text description of the fix")
     code_snippet: str | None = Field(default=None, description="Optional illustrative code snippet for the fix")
@@ -268,6 +269,7 @@ def _dispatch_fixes(
     # Revert to using FailedNode in the future if the code/tests flagging doesn't work
     code_fixes = [f for f in diagnosis.fixes if f.failed_node == "code"]
     test_fixes = [f for f in diagnosis.fixes if f.failed_node == "tests"]
+    dependency_fix = [f for f in diagnosis.fixes if f.failed_node == "missing_dependency"]
 
     if code_fixes:
         logger.info(f"\n  Applying {len(code_fixes)} code fix(es)...")
@@ -277,7 +279,10 @@ def _dispatch_fixes(
         logger.info(f"\n  Applying {len(test_fixes)} test fix(es)...")
         _, tests = _apply_test_fixes(tests, requirements, test_fixes)
 
-    if not code_fixes and not test_fixes:
+    if dependency_fix:
+        logger.info(f"\n Missing dependency error: {dependency_fix}")
+
+    if not code_fixes and not test_fixes and not dependency_fix:
         logger.info("  Diagnosis produced no actionable fixes.")
 
     return code, tests
