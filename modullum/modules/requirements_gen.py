@@ -1,15 +1,12 @@
-import csv
 import logging
-import sys
-from datetime import datetime
-from pathlib import Path
 
 from pydantic import BaseModel
 from pydantic import Field
 from prompt_toolkit import prompt
 from prompt_toolkit.styles import Style
 
-from modullum.core import Node, schema_to_prompt_hint, call_node, Stopwatch, status_spinner
+from modullum.core import Node, schema_to_prompt_hint, call_node, status_spinner
+from modullum.core.workspace import ModuleContext
 from modullum import config
 
 # ── Prompt toolkit style ──────────────────────────────────────────────────────
@@ -114,18 +111,17 @@ ASSUMPTIONS_ANALYSER_PROMPT = (
 
 # ── Main entry point ──────────────────────────────────────────────────────────
 
-def run(base_dir: Path, logger: logging.Logger) -> Path:
+def run(ctx: ModuleContext, logger: logging.Logger) -> RequirementsList:
     """
     Runs the requirements generation module.
 
     Args:
-        base_dir: Project root (used to locate/create the runs/ directory).
-        logger:   Logger instance from main.py.
+        ctx:    ModuleContext provided by HeadAgent. Owns recording and output paths.
+        logger: Logger instance from main.py.
 
     Returns:
-        Path to the saved requirements.txt output file.
+        RequirementsList of accepted requirements.
     """
-    timer = Stopwatch()
 
     # ── Get initial task ──────────────────────────────────────────────────────
     if config.USER_PROMPT:
@@ -150,13 +146,27 @@ def run(base_dir: Path, logger: logging.Logger) -> Path:
     if config.INTERVIEW:
         interviewer_node.add_user(f"Task:\n{initial_prompt}")
 
-        timer.start()
-        with status_spinner("\nJust a moment..."): # Rich
-            questions_json = call_node(
-                interviewer_node, QuestionsList,
-                model=config.MODEL,
-            )
-        timer.stop()
+        rec = ctx.start_node(
+            role="interviewer",
+            prompt=INTERVIEWER_PROMPT,
+            model=config.MODEL,
+            stream=False,
+            think=False,
+            temperature=config.TEMPERATURE,
+        )
+        with status_spinner("\nJust a moment..."):
+            result = call_node(interviewer_node, QuestionsList, model=config.MODEL)
+        rec.finish(
+            tokens_in=result.tokens_in,
+            tokens_out=result.tokens_out,
+            llm_duration_s=result.llm_duration_s,
+            iterations=1,
+            exit_reason="completed",
+            output=str(result.output),
+        )
+        ctx.record_node(rec)
+
+        questions_json = result.output
         interviewer_node.add_assistant(str(questions_json))
 
         logger.info("\nBefore we begin, I have a few questions.\n")
@@ -176,96 +186,123 @@ def run(base_dir: Path, logger: logging.Logger) -> Path:
         assumptions_node.add_user(f"Task:\n{initial_prompt}")
         assumptions_iterations = 1
         user_satisfied = False
+        assumptions_llm_total = 0.0
+        assumptions_tokens_in = 0
+        assumptions_tokens_out = 0
+
+        rec = ctx.start_node(
+            role="assumptions",
+            prompt=ASSUMPTIONS_ANALYSER_PROMPT,
+            model=config.MODEL,
+            stream=config.STREAM_USER_FACING,
+            think=False,
+            temperature=config.TEMPERATURE,
+        )
 
         while not user_satisfied:
-            timer.start()
-            assumptions = call_node(
+            result = call_node(
                 assumptions_node,
                 stream=config.STREAM_USER_FACING,
                 model=config.MODEL,
             )
-            timer.stop()
+            assumptions_llm_total += result.llm_duration_s
+            assumptions_tokens_in += result.tokens_in
+            assumptions_tokens_out += result.tokens_out
+            assumptions = result.output
             assumptions_node.add_assistant(assumptions)
 
             logger.info("\nSpecify changes to the assumptions, or press Enter to accept.\n")
 
             user_feedback = ""
-
             if not config.AUTO_SKIP:
                 user_feedback = get_input()
 
             if user_feedback == "":
                 user_satisfied = True
                 logger.info("Proceeding to requirements generation.\n")
+                exit_reason = "accepted"
             else:
                 assumptions_node.add_user(user_feedback)
                 assumptions_iterations += 1
+                exit_reason = "iterated"
+
+        rec.finish(
+            tokens_in=assumptions_tokens_in,
+            tokens_out=assumptions_tokens_out,
+            llm_duration_s=assumptions_llm_total,
+            iterations=assumptions_iterations,
+            exit_reason=exit_reason,
+            output=assumptions_node.last_response(),
+        )
+        ctx.record_node(rec)
 
         generator_node.add_assistant(f"Assumptions:\n{assumptions_node.last_response()}")
 
-    # ── Requirements generation ───────────────────────────────────────────────
     generator_node.add_user(f"Task:\n{initial_prompt}")
     requirements_iterations = 1
     user_satisfied = False
+    generator_llm_total = 0.0
+    generator_tokens_in = 0
+    generator_tokens_out = 0
+
+    rec = ctx.start_node(
+        role="generator",
+        prompt=REQUIREMENTS_GENERATOR_PROMPT,
+        model=config.MODEL,
+        stream=config.STREAM_REQUIREMENTS_GEN,
+        think=config.REQUIREMENTS_GEN_THINK,
+        temperature=config.TEMPERATURE,
+    )
 
     while not user_satisfied:
-        timer.start()
-        #with status_spinner("\nGenerating requirements..."): # Garbles stream if enabled
-        requirements_json = call_node(
-            generator_node, RequirementsList, 
+        result = call_node(
+            generator_node, RequirementsList,
             think=config.REQUIREMENTS_GEN_THINK,
             stream=config.STREAM_REQUIREMENTS_GEN,
             model=config.MODEL,
         )
-        timer.stop()
+        generator_llm_total += result.llm_duration_s
+        generator_tokens_in += result.tokens_in
+        generator_tokens_out += result.tokens_out
+        requirements_json = result.output
         generator_node.add_assistant(str(requirements_json))
 
         logger.info(f"\nRequirements: {requirements_json}\n")
         logger.info("\nSpecify changes to the requirements, or press Enter to accept.\n")
 
         user_feedback = ""
-
         if not config.AUTO_SKIP:
             user_feedback = get_input()
 
         if user_feedback == "":
             user_satisfied = True
             logger.info("Requirements accepted.\n")
+            exit_reason = "accepted"
         else:
             # Reset to avoid context burnout on iterative edits
             generator_node = Node(REQUIREMENTS_GENERATOR_PROMPT)
             generator_node.add_assistant(f"Last requirements:\n{requirements_json}")
             generator_node.add_user(f"Incorporate changes:\n{user_feedback}")
             requirements_iterations += 1
+            exit_reason = "iterated"
 
-    # ── Save output ───────────────────────────────────────────────────────────
-    """
-    requirements_file = directories.outputs_dir / "requirements.txt"
-    with requirements_file.open("w") as f:
-        f.write(generator_node.last_response())
+    rec.finish(
+        tokens_in=generator_tokens_in,
+        tokens_out=generator_tokens_out,
+        llm_duration_s=generator_llm_total,
+        iterations=requirements_iterations,
+        exit_reason=exit_reason,
+        output=str(requirements_json),
+    )
+    ctx.record_node(rec)
+
+    # ── Save outputs and flush ────────────────────────────────────────────────
+    requirements_file = ctx.module_dir / ".." / ".." / "outputs" / "requirements.txt"
+    requirements_file = requirements_file.resolve()
+    requirements_file.write_text(str(requirements_json), encoding="utf-8")
     logger.info(f"Requirements saved to {requirements_file}")
-    """
 
-    # ── Version record ────────────────────────────────────────────────────────
-    """
-    notes = ""
-    if not config.AUTO_SKIP:
-        notes = get_input("Notes for this run (press Enter to skip): ")
-    record = {
-        "Timestamp": datetime.now().isoformat(),
-        "Script": Path(sys.argv[0]).stem,
-        "Task": initial_prompt,
-        "Serial": directories.serial,
-        "Model": config.MODEL + config.MODEL_VARIANT,
-        "Interview Questions": interview_question_count,
-        "User Assumptions Iterations": assumptions_iterations,
-        "User Requirements Iterations": requirements_iterations,
-        "Total Processing Time": round(timer.elapsed(), 2),
-        "Notes": notes,
-    }
-    with directories.version_csv.open("a", newline="") as f:
-        csv.DictWriter(f, fieldnames=record.keys(), extrasaction="ignore").writerow(record)
-    logger.info("Version record updated.")
-    """
+    ctx.set_outcome(exit_reason="completed")
+    ctx.flush(outputs={"requirements": requirements_file})
 
     return requirements_json

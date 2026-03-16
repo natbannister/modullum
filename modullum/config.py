@@ -5,7 +5,7 @@ THINKING_MODELS = {"qwen3.5:9b", "qwen3.5:0.8b"}
 CODING_MODELS = {"qwen2.5-coder"} # Currently only denotes that model is non-thinking
 
 # MODEL OPTIONS
-MODEL = "granite3.1-moe:3b" # Model used for all nodes.
+MODEL = "qwen2.5-coder" # Model used for all nodes.
 #MODEL_VARIANT = " (7B)" # Only used for specificity in records
 STREAM_USER_FACING = True # User-facing nodes stream output
 STREAM_CODE = True

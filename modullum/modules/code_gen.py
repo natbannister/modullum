@@ -1,10 +1,7 @@
-import csv
 import logging
 import re
 import subprocess
 import tempfile
-import sys
-from datetime import datetime
 from pathlib import Path
 from pydantic import Field
 
@@ -13,7 +10,8 @@ from pydantic import BaseModel
 from prompt_toolkit import prompt
 from prompt_toolkit.styles import Style
 
-from modullum.core import Node, call_node, schema_to_prompt_hint, Stopwatch, status_spinner
+from modullum.core import Node, call_node, schema_to_prompt_hint
+from modullum.core.workspace import ModuleContext
 from modullum import config
 
 
@@ -95,36 +93,6 @@ class RequirementsList(BaseModel):
         return "\n".join(str(r) for r in self.reqs)
 
 
-class ModuleOutput(BaseModel):
-    code: str
-    tests: str
-    max_test_iterations: int
-    max_code_iterations: int
-    test_generation_iterations: int
-    code_generation_iterations: int
-    test_generation_time: float
-    code_generation_time: float
-    function_time: float
-    passed: bool
-
-
-# ── CSV fields ────────────────────────────────────────────────────────────────
-
-CSV_FIELDS = [
-    "Timestamp",
-    "Script",
-#    "Task",
-    "Serial",
-    "Model",
-    "Test Generation Iterations",
-    "Code Generation Iterations",
-    "Test Generation Duration",
-    "Code Generation Duration",
-    "Total Runtime",
-    "LLM Time",
-    "Passed",
-    "Notes",
-]
 
 
 # ── Prompt constants ──────────────────────────────────────────────────────────
@@ -241,6 +209,7 @@ def _apply_code_fixes(
     code: str,
     requirements: str,
     fixes: list[DiagnosedFix],
+    ctx: ModuleContext,
 ) -> tuple[Node, str]:
     """
     Spawns a fresh code repair node, calls it, and returns (node, repaired_code).
@@ -254,15 +223,33 @@ def _apply_code_fixes(
         f"Current code:\n{code}\n\n"
         f"Apply the following fixes, do NOT change any other code:\n{_format_fixes(fixes)}"
     )
-    repaired = call_node(repair_node, stream=config.STREAM_CODE)
-    repair_node.add_assistant(repaired)
-    return repair_node, repaired
+    rec = ctx.start_node(
+        role="code_repairer",
+        prompt=CODE_GENERATOR_PROMPT,
+        model=config.MODEL,
+        stream=config.STREAM_CODE,
+        think=False,
+        temperature=config.TEMPERATURE,
+    )
+    result = call_node(repair_node, stream=config.STREAM_CODE)
+    rec.finish(
+        tokens_in=result.tokens_in,
+        tokens_out=result.tokens_out,
+        llm_duration_s=result.llm_duration_s,
+        iterations=1,
+        exit_reason="completed",
+        output=result.output,
+    )
+    ctx.record_node(rec)
+    repair_node.add_assistant(result.output)
+    return repair_node, result.output
 
 
 def _apply_test_fixes(
     tests: str,
     requirements: str,
     fixes: list[DiagnosedFix],
+    ctx: ModuleContext,
 ) -> tuple[Node, str]:
     """
     Spawns a fresh test repair node, calls it, and returns (node, repaired_tests).
@@ -276,9 +263,26 @@ def _apply_test_fixes(
         f"Current tests:\n{tests}\n\n"
         f"Apply the following fixes ONLY:\n{_format_fixes(fixes)}"
     )
-    repaired = call_node(repair_node, stream=config.STREAM_CODE) # NOTE: SET BACK TO DEFAULT!
-    repair_node.add_assistant(repaired)
-    return repair_node, repaired
+    rec = ctx.start_node(
+        role="test_repairer",
+        prompt=TEST_GENERATOR_PROMPT,
+        model=config.MODEL,
+        stream=config.STREAM_CODE,
+        think=False,
+        temperature=config.TEMPERATURE,
+    )
+    result = call_node(repair_node, stream=config.STREAM_CODE)
+    rec.finish(
+        tokens_in=result.tokens_in,
+        tokens_out=result.tokens_out,
+        llm_duration_s=result.llm_duration_s,
+        iterations=1,
+        exit_reason="completed",
+        output=result.output,
+    )
+    ctx.record_node(rec)
+    repair_node.add_assistant(result.output)
+    return repair_node, result.output
 
 
 def _dispatch_fixes(
@@ -287,6 +291,7 @@ def _dispatch_fixes(
     tests: str,
     requirements: str,
     logger: logging.Logger,
+    ctx: ModuleContext,
 ) -> tuple[str, str]:
     """
     Partitions fixes by target node, spawns a lightweight repair node for each
@@ -301,11 +306,11 @@ def _dispatch_fixes(
 
     if code_fixes:
         logger.info(f"\n  Applying {len(code_fixes)} code fix(es)...")
-        _, code = _apply_code_fixes(code, requirements, code_fixes)
+        _, code = _apply_code_fixes(code, requirements, code_fixes, ctx)
 
     if test_fixes:
         logger.info(f"\n  Applying {len(test_fixes)} test fix(es)...")
-        _, tests = _apply_test_fixes(tests, requirements, test_fixes)
+        _, tests = _apply_test_fixes(tests, requirements, test_fixes, ctx)
 
     if dependency_fix:
         logger.info(f"\n Missing dependency error: {dependency_fix}")
@@ -318,20 +323,18 @@ def _dispatch_fixes(
 
 # ── Main entry point ──────────────────────────────────────────────────────────
 
-def run(base_dir: Path, logger: logging.Logger, requirements: str) -> Path:
+def run(ctx: ModuleContext, logger: logging.Logger, requirements: str) -> tuple[str, str]:
     """
     Runs the code generation module.
 
     Args:
-        base_dir:     Project root (used to locate/create the runs/ directory).
+        ctx:          ModuleContext provided by HeadAgent.
         logger:       Logger instance from main.py.
         requirements: Requirements string passed in from requirements_gen.
 
     Returns:
-        Path to the saved output_code.py file.
+        (code, tests) strings.
     """
-    timer = Stopwatch()        # accumulates pure LLM call time across both phases
-    phase_timer = Stopwatch()  # tracks wall-clock time per phase (and total)
 
     # ── Build nodes ───────────────────────────────────────────────────────────
     test_node = Node(TEST_GENERATOR_PROMPT)
@@ -347,14 +350,23 @@ def run(base_dir: Path, logger: logging.Logger, requirements: str) -> Path:
     criteria_approved = False
     test_generation_iterations = 0
 
-    phase_timer.start()
-
     # ====================== REMOVE this once pipeline works
     requirements = TEMP_REQUIREMENTS
 
+    test_gen_rec = ctx.start_node(
+        role="test_generator",
+        prompt=TEST_GENERATOR_PROMPT,
+        model=config.MODEL,
+        stream=config.STREAM_CODE,
+        think=False,
+        temperature=config.TEMPERATURE,
+    )
+    test_gen_llm_total = 0.0
+    test_gen_tokens_in = 0
+    test_gen_tokens_out = 0
+
     for iteration in range(config.MAX_TEST_ITERATIONS):
 
-        # Increase token limit with each iteration so it doesn't truncate on subsequent cycles
         token_limit = config.BIG_TOKEN_LIMIT + (test_generation_iterations * config.TOKEN_LIMIT)
 
         logger.info(f"\n--- Test Iteration {iteration + 1} ---\n")
@@ -364,13 +376,11 @@ def run(base_dir: Path, logger: logging.Logger, requirements: str) -> Path:
             test_node.add_assistant(f"Feedback on previous tests:\n{test_feedback}")
 
         test_node.add_user(f"Requirements:\n{requirements}")
-        timer.start()
-        tests = call_node(
-            test_node,
-            stream=config.STREAM_CODE,
-            token_limit=token_limit,
-        )
-        timer.stop()
+        result = call_node(test_node, stream=config.STREAM_CODE, token_limit=token_limit)
+        test_gen_llm_total += result.llm_duration_s
+        test_gen_tokens_in += result.tokens_in
+        test_gen_tokens_out += result.tokens_out
+        tests = result.output
 
         if tests:
             last_tests = tests
@@ -379,14 +389,31 @@ def run(base_dir: Path, logger: logging.Logger, requirements: str) -> Path:
 
         if config.TESTS_FEEDBACK:
             feedback_node.add_user(f"Requirements:\n{requirements}\nTests:\n{tests}")
-            timer.start()
-            test_feedback = call_node(
+
+            feedback_rec = ctx.start_node(
+                role="test_feedback",
+                prompt=FEEDBACK_PROMPT,
+                model=config.MODEL,
+                stream=config.STREAM_JSON,
+                think=False,
+                temperature=config.TEMPERATURE,
+            )
+            fb_result = call_node(
                 feedback_node,
                 ManagerAction,
                 stream=config.STREAM_JSON,
                 token_limit=token_limit,
             )
-            timer.stop()
+            feedback_rec.finish(
+                tokens_in=fb_result.tokens_in,
+                tokens_out=fb_result.tokens_out,
+                llm_duration_s=fb_result.llm_duration_s,
+                iterations=1,
+                exit_reason="completed",
+                output=str(fb_result.output),
+            )
+            ctx.record_node(feedback_rec)
+            test_feedback = fb_result.output
 
             if test_feedback.approved:
                 criteria_approved = True
@@ -395,16 +422,23 @@ def run(base_dir: Path, logger: logging.Logger, requirements: str) -> Path:
             criteria_approved = True
             break
 
-    phase_timer.stop()
-    test_generation_time = phase_timer.elapsed()
+    test_gen_exit = "approved" if criteria_approved else "cap_reached"
+    test_gen_rec.finish(
+        tokens_in=test_gen_tokens_in,
+        tokens_out=test_gen_tokens_out,
+        llm_duration_s=test_gen_llm_total,
+        iterations=test_generation_iterations,
+        exit_reason=test_gen_exit,
+        output=tests,
+    )
+    ctx.record_node(test_gen_rec)
 
     if criteria_approved:
-        logger.info(f"\nTests approved in {test_generation_iterations} iteration(s) over {test_generation_time:.2f}s.\n")
+        logger.info(f"\nTests approved in {test_generation_iterations} iteration(s).\n")
     else:
-        logger.info(f"\nMax test iterations reached ({test_generation_iterations}) over {test_generation_time:.2f}s — tests may not be fully validated.\n")
+        logger.info(f"\nMax test iterations reached ({test_generation_iterations}) — tests may not be fully validated.\n")
 
     # ── Code generation ───────────────────────────────────────────────────────
-
     logger.info("\nGenerating code...\n")
 
     code = ""
@@ -413,15 +447,26 @@ def run(base_dir: Path, logger: logging.Logger, requirements: str) -> Path:
 
     code_node.add_user(f"Requirements:\n{requirements}")
 
-    phase_timer.start()
+    code_gen_rec = ctx.start_node(
+        role="code_generator",
+        prompt=CODE_GENERATOR_PROMPT,
+        model=config.MODEL,
+        stream=config.STREAM_CODE,
+        think=False,
+        temperature=config.TEMPERATURE,
+    )
+    code_gen_llm_total = 0.0
+    code_gen_tokens_in = 0
+    code_gen_tokens_out = 0
 
     for iteration in range(config.MAX_CODE_ITERATIONS):
 
         if code_generation_iterations == 0:
-
-            timer.start()
-            code = call_node(code_node, stream=config.STREAM_CODE)
-            timer.stop()
+            result = call_node(code_node, stream=config.STREAM_CODE)
+            code_gen_llm_total += result.llm_duration_s
+            code_gen_tokens_in += result.tokens_in
+            code_gen_tokens_out += result.tokens_out
+            code = result.output
             code_node.add_assistant(code)
 
         logger.info(f"\n--- Test Run Iteration {iteration + 1} ---\n")
@@ -434,81 +479,70 @@ def run(base_dir: Path, logger: logging.Logger, requirements: str) -> Path:
 
         if results["passed"]:
             passed = True
-            phase_timer.stop()
-            code_generation_time = phase_timer.elapsed() - test_generation_time
-            function_time = phase_timer.elapsed()
-            logger.info(f"\nAll code passed tests in {code_generation_iterations} iteration(s) over {code_generation_time:.2f}s.\n")
+            logger.info(f"\nAll tests passed in {code_generation_iterations} iteration(s).\n")
             break
 
         if iteration < config.MAX_CODE_ITERATIONS - 1:
             logger.info("\nAnalysing failures...")
 
-            # Start node fresh
             diagnosis_node = Node(DIAGNOSIS_PROMPT)
-
-            # If test check skipped, give the diagnosis node requirements to refer to
             prefix = f"Requirements:\n{requirements}\n\n" if not config.TESTS_FEEDBACK else ""
-
             diagnosis_node.add_user(
                 f"{prefix}"
                 f"Code:\n{code}\n\n"
                 f"Test output:\n{results['output']}\n\n"
                 "Populate the 'fixes' list for each failing test. Answer in JSON format."
             )
-            timer.start()
-            diagnosis = call_node(
-                diagnosis_node,
-                schema=Diagnosis,
+
+            diag_rec = ctx.start_node(
+                role="diagnosis",
+                prompt=DIAGNOSIS_PROMPT,
+                model=config.MODEL,
                 stream=config.STREAM_JSON,
+                think=False,
+                temperature=config.TEMPERATURE,
             )
-            timer.stop()
+            diag_result = call_node(diagnosis_node, schema=Diagnosis, stream=config.STREAM_JSON)
+            diag_rec.finish(
+                tokens_in=diag_result.tokens_in,
+                tokens_out=diag_result.tokens_out,
+                llm_duration_s=diag_result.llm_duration_s,
+                iterations=1,
+                exit_reason="completed",
+                output=str(diag_result.output),
+            )
+            ctx.record_node(diag_rec)
+            diagnosis = diag_result.output
             diagnosis_node.add_assistant(str(diagnosis))
 
             logger.info(f"\n{diagnosis}")
 
-            # Route each fix to a fresh, lightweight repair node for the appropriate side.
-            code, tests = _dispatch_fixes(diagnosis, code, tests, requirements, logger)
+            code, tests = _dispatch_fixes(diagnosis, code, tests, requirements, logger, ctx)
 
     else:
-        phase_timer.stop()
-        code_generation_time = phase_timer.elapsed() - test_generation_time
-        function_time = phase_timer.elapsed()
-        logger.info(f"\nMax code iterations ({code_generation_iterations}) reached in {code_generation_time:.2f}s — code did not pass tests.\n")
+        logger.info(f"\nMax code iterations ({code_generation_iterations}) reached — code did not pass tests.\n")
+
+    code_gen_exit = "passed" if passed else "cap_reached"
+    code_gen_rec.finish(
+        tokens_in=code_gen_tokens_in,
+        tokens_out=code_gen_tokens_out,
+        llm_duration_s=code_gen_llm_total,
+        iterations=code_generation_iterations,
+        exit_reason=code_gen_exit,
+        output=code,
+    )
+    ctx.record_node(code_gen_rec)
+
+    # ── Save outputs and flush ────────────────────────────────────────────────
+    outputs_dir = ctx.module_dir.parent / "outputs"
+    code_file = outputs_dir / "code.py"
+    tests_file = outputs_dir / "tests.py"
+    code_file.write_text(code, encoding="utf-8")
+    tests_file.write_text(tests, encoding="utf-8")
+    logger.info(f"Code saved to {code_file}")
+    logger.info(f"Tests saved to {tests_file}")
+
+    ctx.set_outcome(exit_reason="passed" if passed else "cap_reached")
+    ctx.flush(outputs={"code": code_file, "tests": tests_file})
 
     return code, tests
-
-
-# ── Version record helper ─────────────────────────────────────────────────────
-"""
-def _record_run(
-    directories,
-    requirements: str,
-    code_generation_iterations: int,
-    test_generation_iterations: int,
-    test_generation_time: float,
-    code_generation_time: float,
-    function_time: float,
-    llm_time: float,
-    passed: bool,
-    logger: logging.Logger,
-) -> None:
-    notes = get_input("Notes for this run (press Enter to skip): ")
-    record = {
-        "Timestamp": datetime.now().isoformat(),
-        "Script": Path(sys.argv[0]).stem,
-        "Task": str(requirements)[:120],  # Truncate for readability in CSV
-        "Serial": directories.serial,
-        "Model": config.MODEL + config.MODEL_VARIANT,
-        "Test Generation Iterations": test_generation_iterations,
-        "Code Generation Iterations": code_generation_iterations,
-        "Test Generation Duration": round(test_generation_time, 2),
-        "Code Generation Duration": round(code_generation_time, 2),
-        "Total Runtime": round(function_time, 2),
-        "LLM Time": round(llm_time, 2),
-        "Passed": passed,
-        "Notes": notes,
-    }
-    with directories.version_csv.open("a", newline="") as f:
-        csv.DictWriter(f, fieldnames=record.keys(), extrasaction="ignore").writerow(record)
-    logger.info("Version record updated.")
-"""

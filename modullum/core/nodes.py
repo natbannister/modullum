@@ -1,7 +1,27 @@
 import ollama
 import re
+import time
+from typing import NamedTuple, Any
 from pydantic import ValidationError
 from modullum import config
+
+
+class NodeResult(NamedTuple):
+    """
+    Return value of call_node(). Carries the parsed output alongside
+    the raw metrics needed by NodeRecord.finish().
+
+    Fields:
+        output        — parsed Pydantic model, or raw string if no schema
+        tokens_in     — prompt token count (prompt_eval_count from Ollama)
+        tokens_out    — completion token count (eval_count from Ollama)
+        llm_duration_s — wall time of the blocking ollama.chat() call only,
+                         excluding any user-facing streaming print overhead
+    """
+    output: Any
+    tokens_in: int
+    tokens_out: int
+    llm_duration_s: float
 
 
 class Node:
@@ -172,12 +192,23 @@ def salvage_truncated_json(content: str) -> str:
 def supports_thinking(model: str) -> bool:
     return any(model.startswith(m) or m in model for m in config.THINKING_MODELS)
 
-def _stream_response(response, thinking_enabled: bool) -> str:
-    """Handles streaming output, with optional thinking block display."""
+def _stream_response(response, thinking_enabled: bool) -> tuple[str, int, int]:
+    """
+    Handles streaming output, with optional thinking block display.
+
+    Returns:
+        (content, tokens_in, tokens_out)
+        Token counts are taken from the final chunk's done_reason response,
+        which Ollama populates once generation is complete.
+    """
     content = ""
     in_thinking = False
+    tokens_in = 0
+    tokens_out = 0
+    last_chunk = None
 
     for chunk in response:
+        last_chunk = chunk
         if thinking_enabled:
             if chunk.message.thinking:
                 if not in_thinking:
@@ -196,7 +227,13 @@ def _stream_response(response, thinking_enabled: bool) -> str:
             content += chunk.message.content
 
     print()
-    return content
+
+    # Final chunk carries the usage stats once done
+    if last_chunk is not None:
+        tokens_in = getattr(last_chunk, "prompt_eval_count", 0) or 0
+        tokens_out = getattr(last_chunk, "eval_count", 0) or 0
+
+    return content, tokens_in, tokens_out
 
 
 def call_node(
@@ -207,12 +244,20 @@ def call_node(
     temperature: float = config.TEMPERATURE,
     token_limit: int = None,
     model: str = config.MODEL,
-):
-    """Queries the model with optional JSON schema enforcement and streaming."""
+) -> NodeResult:
+    """
+    Queries the model with optional JSON schema enforcement and streaming.
+
+    Returns a NodeResult(output, tokens_in, tokens_out, llm_duration_s).
+    output is a parsed Pydantic model when schema is provided, otherwise a string.
+    llm_duration_s covers only the ollama.chat() call; user-input wait time
+    is measured externally by ModuleContext / NodeRecord.
+    """
 
     thinking_enabled = think and supports_thinking(model)
     token_limit = token_limit or (config.THINKING_TOKEN_LIMIT if thinking_enabled else config.TOKEN_LIMIT)
 
+    t0 = time.monotonic()
     response = ollama.chat(
         model=model,
         messages=node.messages(),
@@ -223,17 +268,32 @@ def call_node(
     )
 
     if stream:
-        content = _stream_response(response, thinking_enabled)
+        content, tokens_in, tokens_out = _stream_response(response, thinking_enabled)
     else:
         content = response.message.content
+        tokens_in = getattr(response, "prompt_eval_count", 0) or 0
+        tokens_out = getattr(response, "eval_count", 0) or 0
+
+    llm_duration_s = round(time.monotonic() - t0, 3)
 
     content = strip_code_fences(content) # TODO: Might want to remove this and the method and put it back in the code gen module
 
     if not schema:
-        return content
+        return NodeResult(
+            output=content,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            llm_duration_s=llm_duration_s,
+        )
 
     try:
-        return schema.model_validate_json(content)
+        parsed = schema.model_validate_json(content)
+        return NodeResult(
+            output=parsed,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            llm_duration_s=llm_duration_s,
+        )
     except ValidationError as e:
         if "EOF" not in str(e) and "json_invalid" not in str(e):
             raise
@@ -242,7 +302,18 @@ def call_node(
     salvaged = salvage_truncated_json(content)
 
     try:
-        return schema.model_validate_json(salvaged)
+        parsed = schema.model_validate_json(salvaged)
+        return NodeResult(
+            output=parsed,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            llm_duration_s=llm_duration_s,
+        )
     except ValidationError:
         print("[WARN] Failed to salvage JSON, returning truncated output")
-        return(content)
+        return NodeResult(
+            output=content,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            llm_duration_s=llm_duration_s,
+        )
