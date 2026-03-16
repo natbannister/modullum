@@ -1,0 +1,189 @@
+# Modullum — Recording Infrastructure Work Package
+
+## Initial Concept
+
+The project had recently migrated from single-script functions to a package structure (`modullum/`). During migration, logging and run recording had been temporarily stripped out. The goal of this work package was to reimplement recording in a way that was:
+
+- **Centralised** — one consistent record per run, not scattered writes across modules
+- **Cohesive** — the record structure mirrors the system architecture (run → module → node)
+- **Scaleable** — designed to support future self-improvement: a more evolved version of the model comparing runs across configurations, module layouts, and LLM types
+- **Standardised** — modules return a consistent report format when called by the head agent
+
+The immediate motivation was that the existing `Stopwatch` + CSV approach was manual, fragile under iteration, and captured none of the context needed for model-driven analysis. The longer horizon motivation was to build the data infrastructure needed for a self-improving agent: knowledge base construction, convergence tracking, and automated run analysis pipelines.
+
+---
+
+## Requirements, Collated
+
+### Recording scope
+- Total LLM processing time per module, separate from user wait time and total wall time (`llm_duration_s`, `total_duration_s`, `user_wait_s`)
+- Number of iterations per node type, characterised by the prompt used
+- Prompts used, stored inline for human traceability
+- Input task verbatim (exact user-typed string, not a summary)
+- Per-node: streaming flag, thinking flag, temperature
+- Per-node: token counts (input and output separately)
+- Per-node: exit reason (`accepted`, `auto_skip`, `cap_reached`, `error`)
+- Per-node: error/exception record at both node and module level
+- `quality_score` field as `null` placeholder, to be populated per module later
+
+### Version and config tracking
+- Git commit hash per run
+- Dirty flag plus list of modified files (`git diff --stat`)
+- Full config snapshot stored per run, content-addressed (hash + inline) so runs with the same config hash are directly comparable
+
+### Storage and structure
+- Split between a lightweight human-scannable CSV index and a rich per-run JSON manifest
+- Run folder split into per-module subdirectories (`requirements_gen/`, `code_gen/`)
+- Outputs folder (`outputs/`) for final deliverables: `requirements.txt`, `code.py`, `tests.py`
+- `run.log` at the serial folder root
+- Prompt deduplication library: full text stored inline in per-run files for traceability, deduplicated into `runs/prompts/{hash}.txt` for storage efficiency at scale
+- Config library: same pattern under `runs/configs/{hash}.py`
+- `analysis_index.json` (future) to track which analysis modules have processed each run
+
+### Architecture
+- `RunContext` constructed in `main.py` so the logger can be pointed at the run directory before the agent starts
+- `ModuleContext` as a child of `RunContext`, owned per module, handles its own flush
+- `NodeRecord` dataclass captures a single node call; `start_node()` called before the loop, `finish()` called after, so wall clock correctly spans user wait
+- Head agent calls as lightweight as possible: `ctx.module("name")` passed in, module owns its own recording
+- Keyboard interrupt and exception handling at the head level, with partial manifest flush guaranteed via `finally`
+
+### CSV columns
+```
+serial, timestamp, task_summary, git_hash, dirty, config_hash, config_alias,
+model, total_node_calls, llm_duration_s, total_duration_s, exit_reason,
+quality_score, notes
+```
+
+---
+
+## Changes Made
+
+### `workspace.py` — full rewrite
+Replaced the bare `create_run_directories()` function and `RunDirectories` dataclass with three new classes:
+
+**`NodeRecord`** — dataclass capturing a single node call. Fields: module, role, prompt hash and text, model, stream/think/temperature flags, iterations, tokens in/out, `llm_duration_s`, `wall_duration_s`, `user_wait_s`, exit reason, output, error. `start_node()` sets `_wall_start`; `finish()` computes derived timing fields.
+
+**`ModuleContext`** — owns a module's subdirectory. Exposes `start_node()`, `record_node()`, `set_outcome()`, and `flush()`. On flush writes `prompts.json`, `transcript.jsonl`, and `metrics.json`, and registers each prompt with the shared library.
+
+**`RunContext`** — top-level context. Constructs the serial directory on instantiation (so the log file path is available before `run()` is called). Captures git info and config snapshot. `module()` factory returns child `ModuleContext` instances. `finalise()` flushes all modules, writes `run_manifest.json`, and appends `version_record.csv`.
+
+Also added: `_git_info()` (commit hash, dirty flag, modified file list), `_config_snapshot()` (exec-parses config.py, hashes it, writes to config library), `_write_if_new()` (content-addressed library writer).
+
+### `nodes.py` — targeted changes
+- Added `NodeResult` named tuple: `(output, tokens_in, tokens_out, llm_duration_s)`
+- `_stream_response` now tracks the final chunk and returns `(content, tokens_in, tokens_out)`; Ollama populates `prompt_eval_count` and `eval_count` on the final streaming chunk
+- `call_node` wraps `ollama.chat()` in a `time.monotonic()` bracket, reads token counts from both streaming and non-streaming paths, returns `NodeResult` in all exit branches (happy path, JSON salvage, fallback)
+- Added `import time` and `from typing import NamedTuple, Any`
+
+### `requirements_gen.py`
+- Signature changed from `run(base_dir, logger)` to `run(ctx: ModuleContext, logger)`
+- Removed: `csv`, `datetime`, `sys`, `Path`, `Stopwatch`, `status_spinner` imports
+- All three nodes (interviewer, assumptions, generator) now tracked with `NodeRecord`. `start_node()` called before each loop, accumulator variables collect LLM time and token counts across iterations, `finish()` called after loop exit
+- `call_node()` results accessed via `result.output` (was direct return)
+- Output file written to `runs/{serial}/outputs/requirements.txt` via `ctx.module_dir`
+- `ctx.set_outcome()` and `ctx.flush()` called at end; commented-out CSV and file-write blocks removed
+
+### `code_gen.py`
+- Signature changed from `run(base_dir, logger, requirements)` to `run(ctx: ModuleContext, logger, requirements)`
+- Removed: `csv`, `datetime`, `sys`, `Stopwatch`, `status_spinner` imports; `ModuleOutput` dataclass; `CSV_FIELDS` list; commented-out `_record_run` helper
+- Five node roles now tracked: `test_generator`, `test_feedback`, `code_generator`, `diagnosis`, `code_repairer`, `test_repairer`
+- `_apply_code_fixes()` and `_apply_test_fixes()` updated to accept `ctx` and record repair calls as distinct roles (`code_repairer`, `test_repairer`) — each repair call is separately attributable in the transcript
+- `_dispatch_fixes()` signature updated to pass `ctx` through
+- Phase timers removed; timing now structural via `NodeRecord`
+- `code.py` and `tests.py` written to `runs/{serial}/outputs/`; `ctx.flush()` called at end
+
+### `head.py` — rewrite
+- `HeadAgent.__init__` now accepts `ctx: RunContext` instead of `base_dir`
+- `run()` wraps the full pipeline in `try/except KeyboardInterrupt/except Exception/finally`
+- On `KeyboardInterrupt`: sets `exit_reason = "keyboard_interrupt"`
+- On `Exception`: records error string into any `ModuleContext` still marked `incomplete`, then re-raises
+- `finally`: `ctx.finalise()` guaranteed to run regardless of exit path, writing manifest and CSV row
+- `scope_manager` import retained, commented-out call preserved
+
+### `main.py`
+- `RunContext` constructed before `HeadAgent`, so `ctx.run_dir / "run.log"` is available for logger setup
+- `create_run_directories` import and call removed
+- `HeadAgent` receives `ctx` directly
+
+---
+
+## Output Structure and Captured Data
+
+### Directory layout
+```
+runs/
+  prompts/
+    {sha256[:12]}.txt         — unique prompt texts, written once ever
+  configs/
+    {sha256[:12]}.py          — unique config snapshots, written once ever
+  version_record.csv          — lightweight index, one row per run
+  {serial}/
+    run_manifest.json         — full structured record for this run
+    run.log                   — logger output
+    requirements_gen/
+      prompts.json            — all prompts used by this module, keyed by hash
+      transcript.jsonl        — chronological node records, one JSON object per line
+      metrics.json            — aggregated metrics for this module run
+    code_gen/
+      prompts.json
+      transcript.jsonl
+      metrics.json
+    outputs/
+      requirements.txt
+      code.py
+      tests.py
+```
+
+### `version_record.csv` — per-run index
+| Field | Description |
+|---|---|
+| `serial` | Run number |
+| `timestamp` | ISO 8601 start time |
+| `task_summary` | First 120 chars of user prompt |
+| `git_hash` | Short commit hash |
+| `dirty` | Boolean — uncommitted changes present |
+| `config_hash` | SHA256[:12] of config.py at run time |
+| `config_alias` | Optional human name (null until set) |
+| `model` | Model name from config |
+| `total_node_calls` | Sum across all modules |
+| `llm_duration_s` | Pure LLM API time |
+| `total_duration_s` | Wall clock including user input |
+| `exit_reason` | `completed`, `keyboard_interrupt`, `error` |
+| `quality_score` | null — populated by future evaluation module |
+| `notes` | Free text |
+
+### `run_manifest.json` — full run record
+Top-level fields: `serial`, `timestamp`, `task` (verbatim), `exit_reason`, `notes`, `git` (commit, dirty, dirty_files), `config` (hash + full snapshot), `timing` (llm/total/user_wait), `total_node_calls`, `quality_score`, `modules` (per-module metrics).
+
+### `transcript.jsonl` — per-module node log
+One JSON object per line, appended chronologically. Each entry is a `NodeRecord` with fields:
+
+| Field | Description |
+|---|---|
+| `module` | Module name |
+| `role` | Node role (e.g. `generator`, `code_repairer`) |
+| `prompt_hash` | SHA256[:12] of system prompt |
+| `prompt_text` | Full system prompt inline |
+| `model` | Model used |
+| `stream` / `think` / `temperature` | Call configuration |
+| `iterations` | Loop iterations for this node |
+| `tokens_in` / `tokens_out` | Token counts from Ollama |
+| `llm_duration_s` | Blocking API time only |
+| `wall_duration_s` | Total including user wait |
+| `user_wait_s` | Derived: wall minus LLM |
+| `exit_reason` | `accepted`, `auto_skip`, `cap_reached`, `error` |
+| `output` | Final assistant response |
+| `error` | Exception string if errored, else null |
+
+### Node roles captured
+| Module | Role | Notes |
+|---|---|---|
+| `requirements_gen` | `interviewer` | Only when `INTERVIEW=True` |
+| `requirements_gen` | `assumptions` | Only when `ASSUMPTIONS_USER_REVIEW=True` |
+| `requirements_gen` | `generator` | Always; iterations = user feedback cycles |
+| `code_gen` | `test_generator` | Always |
+| `code_gen` | `test_feedback` | Only when `TESTS_FEEDBACK=True` |
+| `code_gen` | `code_generator` | Always |
+| `code_gen` | `diagnosis` | One record per repair cycle |
+| `code_gen` | `code_repairer` | One record per repair dispatch targeting code |
+| `code_gen` | `test_repairer` | One record per repair dispatch targeting tests |
