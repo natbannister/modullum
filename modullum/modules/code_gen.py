@@ -175,7 +175,8 @@ REQ-001: Function named seir_step SHALL accept S, E, I, R, N, beta, sigma, gamma
          gamma = recovery rate
          dt = timestep
 
-REQ-002: SHALL return tuple (new_S, new_E, new_I, new_R)
+REQ-002a: SHALL return exactly 4 values
+REQ-002b: SHALL return tuple (new_S, new_E, new_I, new_R)
 
 REQ-003: SHALL use forward Euler integration:
          dS = -beta * S * I / N
@@ -273,9 +274,9 @@ def _apply_test_fixes(
     repair_node.add_user(
         f"Requirements:\n{requirements}\n\n"
         f"Current tests:\n{tests}\n\n"
-        f"Apply the following fixes, do NOT change any other code:\n{_format_fixes(fixes)}"
+        f"Apply the following fixes ONLY:\n{_format_fixes(fixes)}"
     )
-    repaired = call_node(repair_node, stream=config.STREAM_CODE)
+    repaired = call_node(repair_node, stream=config.STREAM_CODE) # NOTE: SET BACK TO DEFAULT!
     repair_node.add_assistant(repaired)
     return repair_node, repaired
 
@@ -428,7 +429,8 @@ def run(base_dir: Path, logger: logging.Logger, requirements: str) -> Path:
         results = run_tests(code, tests)
         code_generation_iterations = iteration + 1
 
-        logger.info(str(results["output"]))
+        if config.OUTPUT_PYTEST_RESULTS:
+            logger.info(str(results["output"]))
 
         if results["passed"]:
             passed = True
