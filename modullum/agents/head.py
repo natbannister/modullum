@@ -30,14 +30,8 @@ class HeadAgent:
             task = requirements_json.task
             # scope_manager.run(self.logger, requirements_json)
 
-            # ── While requirements module is blanked out ───────────────────────
-            #requirements_json = ""
-            #task = "development run"
-
             # ── Code generation ───────────────────────────────────────────────
             code, tests = code_gen.run(ctx.module("code_gen"), self.logger, requirements_json)
-            #self.logger.info(str(code))
-            #self.logger.info(str(tests))
 
             exit_reason = "completed"
 

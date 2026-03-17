@@ -240,6 +240,8 @@ class ModuleContext:
         self.exit_reason: str = "incomplete"
         self.error: str | None = None
         self.quality_score: float | None = None   # populated later, per-module
+        self._flushed: bool = False
+        self._flushed_metrics = None
 
         module_dir.mkdir(parents=True, exist_ok=True)
 
@@ -288,6 +290,10 @@ class ModuleContext:
         outputs: optional dict of {label: Path} for files written by this module,
                  e.g. {"requirements": path_to_requirements_txt}
         """
+
+        if self._flushed:
+            return self._flushed_metrics # Guards against recalculating timings at end
+
         # ── prompts.json ──────────────────────────────────────────────────────
         prompts: dict[str, str] = {}
         for r in self._records:
@@ -308,6 +314,9 @@ class ModuleContext:
         metrics_file = self.module_dir / "metrics.json"
         metrics_file.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
 
+        self._flushed = True
+        self._flushed_metrics = metrics
+
         return metrics
     
     def add_user_wait(self, user_wait_s):
@@ -318,8 +327,8 @@ class ModuleContext:
     def _aggregate_metrics(self, outputs: dict[str, Path] | None) -> dict:
         total_llm = round(sum(r.llm_duration_s for r in self._records), 3)
         total_wall = round(time.monotonic() - self._run_start, 3)
-        total_script_duration = round(sum(r.script_duration_s for r in self._records), 3)
-        total_user_wait_s = round(self.total_user_wait_s, 3)
+        total_user_wait = round(self.total_user_wait_s, 3)
+        total_script_duration = round(total_wall - total_llm - total_user_wait, 3)
 
         nodes_summary = []
         for r in self._records:
@@ -351,7 +360,7 @@ class ModuleContext:
             "total_duration_s": total_wall,
             "llm_duration_s": total_llm,
             "script_duration_s": total_script_duration,
-            "user_wait_s": total_user_wait_s,
+            "user_wait_s": total_user_wait,
             "outputs": {k: str(v) for k, v in (outputs or {}).items()},
             "nodes": nodes_summary,
         }
@@ -427,6 +436,7 @@ class RunContext:
         """
         wall_duration = round(time.monotonic() - self._wall_start, 3)
         llm_duration = 0.0
+        user_wait = 0.0
         total_node_calls = 0
         module_metrics: dict[str, dict] = {}
 
@@ -434,6 +444,7 @@ class RunContext:
             metrics = mod_ctx.flush()
             module_metrics[name] = metrics
             llm_duration += metrics["llm_duration_s"]
+            user_wait += metrics["user_wait_s"]
             total_node_calls += metrics["total_node_calls"]
 
         llm_duration = round(llm_duration, 3)
@@ -448,9 +459,10 @@ class RunContext:
             "git": self._git,
             "config": self._config,
             "timing": {
-                "llm_duration_s": llm_duration,
                 "total_duration_s": wall_duration,
-                "script_duration_s": round(wall_duration - llm_duration, 3),
+                "llm_duration_s": llm_duration,
+                "script_duration_s": round(wall_duration - llm_duration - user_wait, 3),
+                "user_wait_s": user_wait,
             },
             "total_node_calls": total_node_calls,
             "quality_score": None,   # populated later by evaluation module
