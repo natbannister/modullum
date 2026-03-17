@@ -155,7 +155,7 @@ class NodeRecord:
     # Wall-clock bookkeeping (set internally)
     _wall_start: float = field(default=0.0, repr=False)
     wall_duration_s: float = 0.0
-    user_wait_s: float = 0.0   # wall - llm
+    script_duration_s: float = 0.0   # wall - llm
 
     def finish(
         self,
@@ -175,7 +175,7 @@ class NodeRecord:
         self.output = output
         self.error = error
         self.wall_duration_s = round(time.monotonic() - self._wall_start, 3)
-        self.user_wait_s = round(self.wall_duration_s - self.llm_duration_s, 3) # TODO: Make this actually time due to waiting for user input
+        self.script_duration_s = round(self.wall_duration_s - self.llm_duration_s, 3) # TODO: Make this actually time due to waiting for user input
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -236,6 +236,7 @@ class ModuleContext:
         self.prompt_library = prompt_library
         self._run_start = run_start
         self._records: list[NodeRecord] = []
+        self.total_user_wait_s: float = 0.0
         self.exit_reason: str = "incomplete"
         self.error: str | None = None
         self.quality_score: float | None = None   # populated later, per-module
@@ -308,13 +309,17 @@ class ModuleContext:
         metrics_file.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
 
         return metrics
+    
+    def add_user_wait(self, user_wait_s):
+        self.total_user_wait_s += user_wait_s
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
     def _aggregate_metrics(self, outputs: dict[str, Path] | None) -> dict:
         total_llm = round(sum(r.llm_duration_s for r in self._records), 3)
         total_wall = round(time.monotonic() - self._run_start, 3)
-        total_user_wait = round(sum(r.user_wait_s for r in self._records), 3)
+        total_script_duration = round(sum(r.script_duration_s for r in self._records), 3)
+        total_user_wait_s = round(self.total_user_wait_s, 3)
 
         nodes_summary = []
         for r in self._records:
@@ -325,9 +330,9 @@ class ModuleContext:
                 "iterations": r.iterations,
                 "tokens_in": r.tokens_in,
                 "tokens_out": r.tokens_out,
-                "llm_duration_s": r.llm_duration_s,
                 "wall_duration_s": r.wall_duration_s,
-                "user_wait_s": r.user_wait_s,
+                "llm_duration_s": r.llm_duration_s,
+                "script_duration_s": r.script_duration_s,
                 "stream": r.stream,
                 "think": r.think,
                 "temperature": r.temperature,
@@ -343,9 +348,10 @@ class ModuleContext:
             "total_node_calls": len(self._records),
             "total_tokens_in": sum(r.tokens_in for r in self._records),
             "total_tokens_out": sum(r.tokens_out for r in self._records),
-            "llm_duration_s": total_llm,
             "total_duration_s": total_wall,
-            "user_wait_s": total_user_wait,
+            "llm_duration_s": total_llm,
+            "script_duration_s": total_script_duration,
+            "user_wait_s": total_user_wait_s,
             "outputs": {k: str(v) for k, v in (outputs or {}).items()},
             "nodes": nodes_summary,
         }
@@ -444,7 +450,7 @@ class RunContext:
             "timing": {
                 "llm_duration_s": llm_duration,
                 "total_duration_s": wall_duration,
-                "user_wait_s": round(wall_duration - llm_duration, 3),
+                "script_duration_s": round(wall_duration - llm_duration, 3),
             },
             "total_node_calls": total_node_calls,
             "quality_score": None,   # populated later by evaluation module

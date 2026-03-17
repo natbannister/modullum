@@ -2,7 +2,10 @@ import logging
 import sys
 import time
 
-# ── Beginning of rich ─────────────────────────────────────────────────────────
+from prompt_toolkit import prompt
+from prompt_toolkit.styles import Style
+
+# ── rich ──────────────────────────────────────────────────────────────────────
 
 from rich.console import Console
 
@@ -11,7 +14,21 @@ console = Console()
 def status_spinner(message: str):
     return console.status(f"[bold]{message}", spinner="dots8")
 
-# ── End of rich ───────────────────────────────────────────────────────────────
+# ── Prompt toolkit style ──────────────────────────────────────────────────────
+
+_style = Style.from_dict({"placeholder": "#666666"})
+
+def get_input(placeholder: str = "Send a message") -> str:
+    """Request user input with a stylised prompter and wait time recording."""
+    t0 = time.monotonic()
+
+    user_input = prompt(">>> ", placeholder=placeholder, style=_style)
+
+    user_wait_s = round(time.monotonic() - t0, 3)
+
+    return user_input, user_wait_s
+
+# ── Logging ───────────────────────────────────────────────────────────────────
 
 class StreamingConsoleHandler(logging.StreamHandler):
     """

@@ -2,21 +2,11 @@ import logging
 
 from pydantic import BaseModel
 from pydantic import Field
-from prompt_toolkit import prompt
-from prompt_toolkit.styles import Style
 
 from modullum.core import Node, schema_to_prompt_hint, call_node, status_spinner
 from modullum.core.workspace import ModuleContext
+from modullum.core.terminal import get_input
 from modullum import config
-
-# ── Prompt toolkit style ──────────────────────────────────────────────────────
-
-_style = Style.from_dict({"placeholder": "#666666"})
-
-
-def get_input(placeholder: str = "Send a message") -> str:
-    return prompt(">>> ", placeholder=placeholder, style=_style)
-
 
 # ── Pydantic schemas ──────────────────────────────────────────────────────────
 
@@ -46,6 +36,7 @@ class Requirement(BaseModel):
 
 
 class RequirementsList(BaseModel):
+    task: str = Field(description="One line summary of task, no verbs")
     requirements: list[Requirement]
 
     def __str__(self):
@@ -125,7 +116,8 @@ def run(ctx: ModuleContext, logger: logging.Logger) -> RequirementsList:
 
     # ── Get initial task ──────────────────────────────────────────────────────
     if config.USER_PROMPT:
-        initial_prompt = get_input()
+        initial_prompt, user_wait_s = get_input()
+        ctx.add_user_wait(user_wait_s)
     else:
         initial_prompt = "Create a SEIR step modelling function"
         logger.info(f"User input skipped, defaulting to: {initial_prompt}\n")
@@ -173,7 +165,8 @@ def run(ctx: ModuleContext, logger: logging.Logger) -> RequirementsList:
         for q in questions_json.questions:
             logger.info(f"\n{q.question}")
             if not config.AUTO_SKIP:
-                answer = get_input("Your answer").strip()
+                answer, user_wait_s = get_input("Your answer").strip()
+                ctx.add_user_wait(user_wait_s)
             q.answer = answer if answer else "No answer provided."
 
         interview_question_count = len(questions_json.questions)
@@ -215,7 +208,8 @@ def run(ctx: ModuleContext, logger: logging.Logger) -> RequirementsList:
 
             user_feedback = ""
             if not config.AUTO_SKIP:
-                user_feedback = get_input()
+                user_feedback, user_wait_s = get_input()
+                ctx.add_user_wait(user_wait_s)
 
             if user_feedback == "":
                 user_satisfied = True
@@ -267,12 +261,13 @@ def run(ctx: ModuleContext, logger: logging.Logger) -> RequirementsList:
         requirements_json = result.output
         generator_node.add_assistant(str(requirements_json))
 
-        logger.info(f"\nRequirements: {requirements_json}\n")
+        logger.info(f"\nRequirements: \n{requirements_json}\n")
         logger.info("\nSpecify changes to the requirements, or press Enter to accept.\n")
 
         user_feedback = ""
         if not config.AUTO_SKIP:
-            user_feedback = get_input()
+            user_feedback, user_wait_s = get_input()
+            ctx.add_user_wait(user_wait_s)
 
         if user_feedback == "":
             user_satisfied = True
@@ -297,8 +292,9 @@ def run(ctx: ModuleContext, logger: logging.Logger) -> RequirementsList:
     ctx.record_node(rec)
 
     # ── Save outputs and flush ────────────────────────────────────────────────
-    requirements_file = ctx.module_dir / ".." / ".." / "outputs" / "requirements.txt"
+    requirements_file = ctx.module_dir / ".." / "outputs" / "requirements.txt"
     requirements_file = requirements_file.resolve()
+    requirements_file.parent.mkdir(parents=True, exist_ok=True)
     requirements_file.write_text(str(requirements_json), encoding="utf-8")
     logger.info(f"Requirements saved to {requirements_file}")
 

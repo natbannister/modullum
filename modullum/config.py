@@ -5,7 +5,7 @@ THINKING_MODELS = {"qwen3.5:9b", "qwen3.5:0.8b"}
 CODING_MODELS = {"granite3.1-moe:3b"} # Currently only denotes that model is non-thinking
 
 # MODEL OPTIONS
-MODEL = "qwen3.5:9b" # Model used for all nodes.
+MODEL = "granite3.1-moe:3b" # Model used for all nodes.
 #MODEL_VARIANT = " (7B)" # Only used for specificity in records
 STREAM_USER_FACING = True # User-facing nodes stream output
 STREAM_CODE = True
@@ -24,10 +24,10 @@ OUTPUT_PYTEST_RESULTS = False # Print Pytest results to terminal
 
 # REQUIREMENTS MODULE
 USER_PROMPT = False # Normally True, set False if a pre-written prompt is desired for faster R&D
-AUTO_SKIP = True # Skips any user input stages
+AUTO_SKIP = False # Skips any user input stages
 INTERVIEW = False # Set to True to prompt user feedback to aid task scoping
 INTERVIEW_QUESTION_COUNT = 3 # Prompted questions limit to aid requirements generation
-ASSUMPTIONS_USER_REVIEW = False
+ASSUMPTIONS_USER_REVIEW = True
 REQUIREMENTS_CAP = 15 # Prompted requirements limit to prevent requirements degeneration
 REQUIREMENTS_GEN_THINK = False
 STREAM_REQUIREMENTS_GEN = True

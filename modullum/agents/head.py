@@ -26,13 +26,13 @@ class HeadAgent:
             self.logger.info("\nLet's get started.\n")
 
             # ── Requirements ──────────────────────────────────────────────────
-            # requirements_json = requirements_gen.run(ctx.module("requirements_gen"), self.logger)
+            requirements_json = requirements_gen.run(ctx.module("requirements_gen"), self.logger)
+            task = requirements_json.task
             # scope_manager.run(self.logger, requirements_json)
-            # task = requirements_json.task  # or however task string is surfaced
 
             # ── While requirements module is blanked out ───────────────────────
-            requirements_json = ""
-            task = "development run"
+            #requirements_json = ""
+            #task = "development run"
 
             # ── Code generation ───────────────────────────────────────────────
             code, tests = code_gen.run(ctx.module("code_gen"), self.logger, requirements_json)
