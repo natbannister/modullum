@@ -2,10 +2,10 @@
 # Add as desired. If the model has thinking, add it to the THINKING_MODELS list for correct usage
 ALL_MODELS = {"qwen3.5:9b", "qwen3.5:0.8b", "qwen2.5-coder", "granite3.1-moe:3b"}
 THINKING_MODELS = {"qwen3.5:9b", "qwen3.5:0.8b"}
-CODING_MODELS = {"qwen2.5-coder"} # Currently only denotes that model is non-thinking
+CODING_MODELS = {"granite3.1-moe:3b"} # Currently only denotes that model is non-thinking
 
 # MODEL OPTIONS
-MODEL = "qwen2.5-coder" # Model used for all nodes.
+MODEL = "qwen3.5:9b" # Model used for all nodes.
 #MODEL_VARIANT = " (7B)" # Only used for specificity in records
 STREAM_USER_FACING = True # User-facing nodes stream output
 STREAM_CODE = True

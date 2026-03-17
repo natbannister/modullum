@@ -36,8 +36,8 @@ class HeadAgent:
 
             # ── Code generation ───────────────────────────────────────────────
             code, tests = code_gen.run(ctx.module("code_gen"), self.logger, requirements_json)
-            self.logger.info(str(code))
-            self.logger.info(str(tests))
+            #self.logger.info(str(code))
+            #self.logger.info(str(tests))
 
             exit_reason = "completed"
 

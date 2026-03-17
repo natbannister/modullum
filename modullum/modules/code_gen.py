@@ -102,7 +102,7 @@ TEST_GENERATOR_PROMPT = (
     "\nAlways import the function using: from module import <function_name>. Generate one test per functional requirement."
     "\nNever implement or redefine the function in the test file. The function will be provided separately."
     "\nDo not generate tests that check function signatures or parameter counts."
-    f"\nInclude a comment at the start: # Generated in Modullum by {config.MODEL}"
+    f"\nInclude a comment at the start: # Generated in Modullum with {config.MODEL}"
 )
 
 FEEDBACK_PROMPT = (
@@ -116,7 +116,7 @@ FEEDBACK_PROMPT = (
 
 CODE_GENERATOR_PROMPT = (
     "Use the requirements to generate Python code only. No explanation."
-    f"\nInclude a comment at the start: # Generated in Modullum by {config.MODEL}"
+    f"\nInclude a comment at the start: # Generated in Modullum with {config.MODEL}"
 )
 
 DIAGNOSIS_PROMPT = (

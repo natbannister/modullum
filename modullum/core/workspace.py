@@ -60,9 +60,11 @@ def _write_if_new(library_dir: Path, hash_str: str, content: str, suffix: str) -
         target.write_text(content, encoding="utf-8")
 
 
-def _git_info(base_dir: Path) -> dict:
+def _git_info(base_dir: Path, diff_library: Path) -> dict:
     """
-    Returns commit hash, dirty flag, and list of modified files.
+    Returns commit hash, diff_hash (sha256[:12] of the full diff, or None if
+    clean), and list of modified files.  The raw diff is written to
+    diff_library/{diff_hash}.diff so it can be replayed later.
     Falls back gracefully if git is unavailable or base_dir is not a repo.
     """
     def run(cmd: list[str]) -> str:
@@ -73,19 +75,20 @@ def _git_info(base_dir: Path) -> dict:
 
     commit = run(["git", "rev-parse", "--short", "HEAD"])
     if not commit:
-        return {"commit": None, "dirty": None, "dirty_files": []}
+        return {"commit": None, "diff_hash": None, "dirty_files": []}
 
-    dirty_stat = run(["git", "diff", "--stat", "HEAD"])
-    dirty_files = []
-    if dirty_stat:
-        # Lines like "modullum/config.py | 3 +++" — extract just the filenames
-        for line in dirty_stat.splitlines():
-            if "|" in line:
-                dirty_files.append(line.split("|")[0].strip())
+    diff_text = run(["git", "diff", "HEAD"])
+    if not diff_text:
+        return {"commit": commit, "diff_hash": None, "dirty_files": []}
+
+    diff_hash = _sha256_text(diff_text)
+    _write_if_new(diff_library, diff_hash, diff_text, ".diff")
+
+    dirty_files = run(["git", "diff", "--name-only", "HEAD"]).splitlines()
 
     return {
         "commit": commit,
-        "dirty": bool(dirty_files),
+        "diff_hash": diff_hash,
         "dirty_files": dirty_files,
     }
 
@@ -172,7 +175,7 @@ class NodeRecord:
         self.output = output
         self.error = error
         self.wall_duration_s = round(time.monotonic() - self._wall_start, 3)
-        self.user_wait_s = round(self.wall_duration_s - self.llm_duration_s, 3)
+        self.user_wait_s = round(self.wall_duration_s - self.llm_duration_s, 3) # TODO: Make this actually time due to waiting for user input
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -380,13 +383,14 @@ class RunContext:
         self.outputs_dir = self.run_dir / "outputs"
         self._prompt_library = runs_dir / "prompts"
         self._config_library = runs_dir / "configs"
+        self._diff_library   = runs_dir / "diffs"
         self._version_csv = runs_dir / "version_record.csv"
 
         self.run_dir.mkdir()
         self.outputs_dir.mkdir()
 
         # ── Git + config ──────────────────────────────────────────────────────
-        self._git = _git_info(base_dir)
+        self._git = _git_info(base_dir, self._diff_library)
         self._config = _config_snapshot(base_dir, self._config_library)
 
         # ── Module contexts ───────────────────────────────────────────────────
@@ -452,7 +456,7 @@ class RunContext:
 
         # ── version_record.csv ────────────────────────────────────────────────
         _CSV_FIELDS = [
-            "serial", "timestamp", "task_summary", "git_hash", "dirty",
+            "serial", "timestamp", "task_summary", "git_hash", "diff_hash",
             "config_hash", "config_alias", "model", "total_node_calls",
             "llm_duration_s", "total_duration_s", "exit_reason",
             "quality_score", "notes",
@@ -467,7 +471,7 @@ class RunContext:
                 "timestamp": self._start_dt.isoformat(),
                 "task_summary": task[:120],
                 "git_hash": self._git.get("commit"),
-                "dirty": self._git.get("dirty"),
+                "diff_hash": self._git.get("diff_hash"),
                 "config_hash": self._config.get("hash"),
                 "config_alias": None,   # set manually or by a future naming layer
                 "model": self._config["snapshot"].get("MODEL"),

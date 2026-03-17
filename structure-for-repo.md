@@ -1,0 +1,24 @@
+modullum/
+    modullum/
+        agents/
+            __init__.py
+            head.py
+        core/
+            __init__.py
+            nodes.py
+            stopwatch.py
+            terminal.py
+            workspace.py
+        modules/
+            __init__.py
+            code_gen.py
+            requirements_gen.py
+            scope_manager.py
+        tools/
+            __init__.py
+        config.py
+        main.py
+.gitignore
+LICENSE
+README.md 
+pyproject.toml
