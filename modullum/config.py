@@ -31,3 +31,12 @@ ASSUMPTIONS_USER_REVIEW = True
 REQUIREMENTS_CAP = 15 # Prompted requirements limit to prevent requirements degeneration
 REQUIREMENTS_GEN_THINK = False
 STREAM_REQUIREMENTS_GEN = True
+
+# RESEARCH MODULE (NOTE: NOT YET IMPLEMENTED!)
+RESEARCH_ENABLED = False # Set to True to enable the research module (analytical hemisphere)
+RESEARCH_PROVIDER = "tavily" # Search provider to use (e.g., tavily, duckduckgo, etc.)
+RESEARCH_MAX_RESULTS = 5 # Maximum number of search results to fetch per query
+RESEARCH_API_KEY = "" # API key for the search provider (if required)
+RESEARCH_RELEVANCE_GATE_MODEL = "claude-haiku-4-5-20251001" # Model for relevance gate (binary classification)
+RESEARCH_STRUCTURED_EXTRACTION_MODEL = "claude-sonnet-4-6" # Model for structured field extraction
+RESEARCH_USER_APPROVAL = True # Require user approval before proceeding to requirements generation

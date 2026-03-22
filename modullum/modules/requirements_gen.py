@@ -77,6 +77,47 @@ Complete requirements definition set:
 [C] Dependencies it must or must not use?
 """
 
+# Below made by minimax-m2.7:cloud
+FUNCTION_REQUIRMENTS_SET_DEFINITION = """
+Complete requirements definition set. Output a flat numbered list of requirements, each starting with "REQ-NNN:".
+Every requirement must be atomic — one requirement per line, no conjunctions.
+
+=== SECTION 1: IDENTITY & SCOPE ===
+Answer these before generating any other requirements:
+- What is the thing being built? (function, module, service, script)
+- What is its name?
+- What problem does it solve?
+- What is explicitly out of scope? (list at least 3 things that this WILL NOT do)
+
+=== SECTION 2: INTERFACE ===
+Generate ONE requirement per input and ONE per output:
+- REQ-NNN: [Interface] The function SHALL accept <name> (<type>) as input, with valid range <range or constraints>
+- REQ-NNN: [Interface] The function SHALL return <name> (<type>) as output
+- REQ-NNN: [Interface] The function SHALL be called as <exact signature or usage>
+- REQ-NNN: [Interface] The function SHALL NOT depend on <external dependency>
+
+=== SECTION 3: FUNCTIONAL BEHAVIOUR ===
+Generate ONE requirement per distinct behavior:
+- REQ-NNN: [Functional] On valid inputs, the function SHALL <specific behavior>
+- REQ-NNN: [Invariant] The function SHALL maintain <state invariant> throughout execution
+
+=== SECTION 4: BOUNDARY & EDGE CASES ===
+Generate at least 3 requirements covering invalid inputs and boundaries:
+- REQ-NNN: [Validation] The function SHALL raise <exception> when <condition>
+- REQ-NNN: [Validation] The function SHALL handle <boundary case> by <behavior>
+
+=== SECTION 5: CONSTRAINTS ===
+- REQ-NNN: [Constraint] The function SHALL complete in <specific threshold> (not "be fast")
+- REQ-NNN: [Constraint] The function SHALL use only <allowed dependencies>
+- REQ-NNN: [Constraint] The implementation SHALL use <specific algorithm or method> if required
+
+=== PRIORITISATION ===
+1. Interface requirements first (function signature is foundational)
+2. Validation requirements before functional ones (fail gracefully before succeeding)
+3. Constraints last (non-functional requirements are enforcers, not enablers)
+4. Do NOT generate more than 15 requirements total. Stop when the core contract is specified.
+"""
+
 INTERVIEWER_PROMPT = (
     "The user has requested a task be completed based on their prompt."
     f"\nUsing the complete requirements set definition provided, generate the "
