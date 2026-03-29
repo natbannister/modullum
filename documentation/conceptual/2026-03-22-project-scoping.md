@@ -100,11 +100,14 @@ requirements_gen works from clean restatement
 
 ### What scope level gates
 
-- **Research:** Only meaningful above a certain complexity threshold. A level 1 task doesn't warrant web research.
-- **Model selection:** No point running a large model on a level 1 task. Scope determines the capability floor.
 - **Requirements depth:** `REQUIREMENTS_CAP` and iteration budgets should scale with scope.
-- **Code generation strategy:** Levels 1–3 fit in a single context. Levels 4+ require a planning pass and a reconciliation module (see below).
+- **Code generation tiers:** Levels 1–3 fit in a single context. Levels 4+ require a planning pass and a reconciliation module (see below).
 - **Quality signals:** pytest pass rate is meaningful for levels 1–3. Requirements coverage matters more for 4+. Longitudinal comparison only applies at 6–7.
+
+### What scope does NOT gate:
+
+- **Research:** Research may still be required.
+- **Model selection:** The code generation module operates at the minimum scope level and requires an adequate model to function.
 
 ---
 

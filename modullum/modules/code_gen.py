@@ -350,8 +350,9 @@ def run(ctx: ModuleContext, logger: logging.Logger, requirements: str) -> tuple[
     criteria_approved = False
     test_generation_iterations = 0
 
-    # ====================== REMOVE this once pipeline works
-    requirements = TEMP_REQUIREMENTS
+    # Developer mode to use default requirements set as provided above
+    if config.SKIP_REQUIREMENTS:
+        requirements = TEMP_REQUIREMENTS
 
     test_gen_rec = ctx.start_node(
         role="test_generator",

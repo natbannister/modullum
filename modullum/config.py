@@ -1,11 +1,11 @@
 # MODELS (A coding model doesn't inherently need to be chosen for coding)
 # Add as desired. If the model has thinking, add it to the THINKING_MODELS list for correct usage
-ALL_MODELS = {"qwen3.5:9b", "qwen3.5:0.8b", "qwen2.5-coder", "granite3.1-moe:3b"}
-THINKING_MODELS = {"qwen3.5:9b", "qwen3.5:0.8b"}
+ALL_MODELS = {"qwen3.5:9b", "qwen3.5:0.8b", "granite4:tiny-h", "qwen2.5-coder", "nemotron-3-nano:4b", "granite3.1-moe:3b"}
+THINKING_MODELS = {"qwen3.5:9b", "qwen3.5:0.8b", "nemotron-3-nano:4b"}
 CODING_MODELS = {"granite3.1-moe:3b"} # Currently only denotes that model is non-thinking
 
 # MODEL OPTIONS
-MODEL = "granite3.1-moe:3b" # Model used for all nodes.
+MODEL = "granite4:tiny-h" # Model used for all nodes.
 #MODEL_VARIANT = " (7B)" # Only used for specificity in records
 STREAM_USER_FACING = True # User-facing nodes stream output
 STREAM_CODE = True
@@ -16,6 +16,7 @@ THINKING_TOKEN_LIMIT = None  #8192 # Default token limit for thinking
 TEMPERATURE = 0.0 # Determinism option - lower is more deterministic
 
 # CODEGEN MODULE
+SKIP_REQUIREMENTS = True # Straight to codegen on default requiremnets set (developer)
 INPUT_REVIEW = False # Module outputs assessment of input requirements
 TESTS_FEEDBACK = False # Enable or disble analysis of tests before code generation
 MAX_TEST_ITERATIONS = 2 # Maxmium attempts to generate pytests
@@ -23,13 +24,13 @@ MAX_CODE_ITERATIONS = 3 # Maximum attempts to generate code
 OUTPUT_PYTEST_RESULTS = False # Print Pytest results to terminal
 
 # REQUIREMENTS MODULE
-USER_PROMPT = False # Normally True, set False if a pre-written prompt is desired for faster R&D
+USER_PROMPT = True # Normally True, set False if a pre-written prompt is desired for faster R&D
 AUTO_SKIP = False # Skips any user input stages
-INTERVIEW = False # Set to True to prompt user feedback to aid task scoping
+INTERVIEW = True # Set to True to prompt user feedback to aid task scoping
 INTERVIEW_QUESTION_COUNT = 3 # Prompted questions limit to aid requirements generation
 ASSUMPTIONS_USER_REVIEW = True
 REQUIREMENTS_CAP = 15 # Prompted requirements limit to prevent requirements degeneration
-REQUIREMENTS_GEN_THINK = False
+REQUIREMENTS_GEN_THINK = True
 STREAM_REQUIREMENTS_GEN = True
 
 # RESEARCH MODULE (NOTE: NOT YET IMPLEMENTED!)

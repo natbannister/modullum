@@ -206,7 +206,8 @@ def run(ctx: ModuleContext, logger: logging.Logger) -> RequirementsList:
         for q in questions_json.questions:
             logger.info(f"\n{q.question}")
             if not config.AUTO_SKIP:
-                answer, user_wait_s = get_input("Your answer").strip()
+                answer, user_wait_s = get_input("Your answer")
+                answer = answer.strip()
                 ctx.add_user_wait(user_wait_s)
             q.answer = answer if answer else "No answer provided."
 

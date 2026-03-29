@@ -3,6 +3,7 @@ import logging
 
 from modullum.core.workspace import RunContext
 from modullum.modules import requirements_gen, code_gen, scope_manager
+from modullum import config
 
 
 class HeadAgent:
@@ -26,8 +27,12 @@ class HeadAgent:
             self.logger.info("\nLet's get started.\n")
 
             # ── Requirements ──────────────────────────────────────────────────
-            requirements_json = requirements_gen.run(ctx.module("requirements_gen"), self.logger)
-            task = requirements_json.task
+            if config.SKIP_REQUIREMENTS:
+                requirements_json = ""
+
+            else:
+                requirements_json = requirements_gen.run(ctx.module("requirements_gen"), self.logger)
+                task = requirements_json.task
             # scope_manager.run(self.logger, requirements_json)
 
             # ── Code generation ───────────────────────────────────────────────
