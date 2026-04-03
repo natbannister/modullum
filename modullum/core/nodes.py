@@ -1,6 +1,7 @@
 import ollama
 import re
 import time
+import sys
 from typing import NamedTuple, Any
 from pydantic import ValidationError
 from modullum import config
@@ -192,7 +193,7 @@ def salvage_truncated_json(content: str) -> str:
 def supports_thinking(model: str) -> bool:
     return any(model.startswith(m) or m in model for m in config.THINKING_MODELS)
 
-def _stream_response(response, thinking_enabled: bool) -> tuple[str, int, int]:
+def _stream_response(response, thinking_enabled: bool, writer=None) -> tuple[str, int, int]:
     """
     Handles streaming output, with optional thinking block display.
 
@@ -200,7 +201,12 @@ def _stream_response(response, thinking_enabled: bool) -> tuple[str, int, int]:
         (content, tokens_in, tokens_out)
         Token counts are taken from the final chunk's done_reason response,
         which Ollama populates once generation is complete.
+
+    writer: anything with a .write(str) method. Defaults to sys.stdout.
     """
+
+    out = writer or sys.stdout
+
     content = ""
     in_thinking = False
     tokens_in = 0
@@ -212,21 +218,24 @@ def _stream_response(response, thinking_enabled: bool) -> tuple[str, int, int]:
         if thinking_enabled:
             if chunk.message.thinking:
                 if not in_thinking:
-                    print("Thinking:\n", end="")
+                    out.write("Thinking:\n")
                     in_thinking = True
-                print(chunk.message.thinking, end="", flush=True)
+                out.write(chunk.message.thinking)
+                out.flush()
             elif chunk.message.content:
                 if in_thinking:
-                    print("\n\nAnswer:\n", end="")
+                    out.write("\n\nAnswer:\n")
                     in_thinking = False
-                print(chunk.message.content, end="", flush=True)
+                out.write(chunk.message.content)
+                out.flush()
                 content += chunk.message.content
         else:
             #print(repr(chunk)) # Debug only
-            print(chunk.message.content, end="", flush=True)
+            out.write(chunk.message.content)
+            out.flush()
             content += chunk.message.content
 
-    print()
+    out.write("\n")
 
     # Final chunk carries the usage stats once done
     if last_chunk is not None:
@@ -244,6 +253,7 @@ def call_node(
     temperature: float = config.TEMPERATURE,
     token_limit: int = None,
     model: str = config.MODEL,
+    stream_display = None,
 ) -> NodeResult:
     """
     Queries the model with optional JSON schema enforcement and streaming.
@@ -264,11 +274,11 @@ def call_node(
         format=schema.model_json_schema() if schema else None,
         think=thinking_enabled if supports_thinking(model) else None,
         stream=stream,
-        options={"temperature": temperature, "num_predict": token_limit},
+        options={"temperature": temperature, "top_p": 0.8, "top_k": 20,"num_predict": token_limit},
     )
 
     if stream:
-        content, tokens_in, tokens_out = _stream_response(response, thinking_enabled)
+        content, tokens_in, tokens_out = _stream_response(response, thinking_enabled, writer=stream_display)
     else:
         content = response.message.content
         tokens_in = getattr(response, "prompt_eval_count", 0) or 0

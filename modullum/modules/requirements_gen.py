@@ -5,7 +5,8 @@ from pydantic import Field
 
 from modullum.core import Node, schema_to_prompt_hint, call_node, status_spinner
 from modullum.core.workspace import ModuleContext
-from modullum.core.terminal import get_input
+from modullum.core.terminal import get_input, console
+from modullum.core.stream_display import StreamDisplay
 from modullum import config
 
 # ── Pydantic schemas ──────────────────────────────────────────────────────────
@@ -274,6 +275,8 @@ def run(ctx: ModuleContext, logger: logging.Logger) -> RequirementsList:
 
         generator_node.add_assistant(f"Assumptions:\n{assumptions_node.last_response()}")
 
+    # ── Requirements ──────────────────────────────────────────────────────────
+
     generator_node.add_user(f"Task:\n{initial_prompt}")
     requirements_iterations = 1
     user_satisfied = False
@@ -291,12 +294,15 @@ def run(ctx: ModuleContext, logger: logging.Logger) -> RequirementsList:
     )
 
     while not user_satisfied:
-        result = call_node(
-            generator_node, RequirementsList,
-            think=config.REQUIREMENTS_GEN_THINK,
-            stream=config.STREAM_REQUIREMENTS_GEN,
-            model=config.MODEL,
-        )
+        with status_spinner("Generating requirements...\n"):
+            with StreamDisplay() as display:
+                result = call_node(
+                    generator_node, RequirementsList,
+                    think=config.REQUIREMENTS_GEN_THINK,
+                    stream=config.STREAM_REQUIREMENTS_GEN,
+                    model=config.MODEL,
+                    stream_display=display,
+                )
         generator_llm_total += result.llm_duration_s
         generator_tokens_in += result.tokens_in
         generator_tokens_out += result.tokens_out

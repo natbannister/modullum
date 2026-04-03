@@ -13,10 +13,10 @@ STREAM_JSON = True
 TOKEN_LIMIT = 2048 # Cuts off node after limit reached (causes bad cutoff on JSON outputs if hit)
 BIG_TOKEN_LIMIT = 8192 # Used on more intensive nodes
 THINKING_TOKEN_LIMIT = None  #8192 # Default token limit for thinking
-TEMPERATURE = 0.0 # Determinism option - lower is more deterministic
+TEMPERATURE = 0.6 # Determinism option - lower is more deterministic
 
 # CODEGEN MODULE
-SKIP_REQUIREMENTS = True # Straight to codegen on default requiremnets set (developer)
+SKIP_REQUIREMENTS = False # Straight to codegen on default requiremnets set (developer)
 INPUT_REVIEW = False # Module outputs assessment of input requirements
 TESTS_FEEDBACK = False # Enable or disble analysis of tests before code generation
 MAX_TEST_ITERATIONS = 2 # Maxmium attempts to generate pytests
@@ -24,13 +24,13 @@ MAX_CODE_ITERATIONS = 3 # Maximum attempts to generate code
 OUTPUT_PYTEST_RESULTS = False # Print Pytest results to terminal
 
 # REQUIREMENTS MODULE
-USER_PROMPT = True # Normally True, set False if a pre-written prompt is desired for faster R&D
+USER_PROMPT = False # Normally True, set False if a pre-written prompt is desired for faster R&D
 AUTO_SKIP = False # Skips any user input stages
-INTERVIEW = True # Set to True to prompt user feedback to aid task scoping
+INTERVIEW = False # Set to True to prompt user feedback to aid task scoping
 INTERVIEW_QUESTION_COUNT = 3 # Prompted questions limit to aid requirements generation
-ASSUMPTIONS_USER_REVIEW = True
+ASSUMPTIONS_USER_REVIEW = False
 REQUIREMENTS_CAP = 15 # Prompted requirements limit to prevent requirements degeneration
-REQUIREMENTS_GEN_THINK = True
+REQUIREMENTS_GEN_THINK = False
 STREAM_REQUIREMENTS_GEN = True
 
 # RESEARCH MODULE (NOTE: NOT YET IMPLEMENTED!)
