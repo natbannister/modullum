@@ -1,0 +1,43 @@
+# MODELS (A coding model doesn't inherently need to be chosen for coding)
+# Add as desired. If the model has thinking, add it to the THINKING_MODELS list for correct usage
+models:
+  all: [qwen3.5:9b, qwen3.5:0.8b, granite4:tiny-h, qwen2.5-coder, nemotron-3-nano:4b, granite3.1-moe:3b]
+  thinking: [qwen3.5:9b, qwen3.5:0.8b, nemotron-3-nano:4b]
+  moe: [granite4:tiny-h, granite3.1-moe:3b]
+  coding: [qwen2.5-coder]
+
+model_options:
+  model: granite4:tiny-h        # Model used for all nodes.
+  stream_user_facing: true      # User-facing nodes stream output
+  stream_code: true
+  stream_json: true
+  token_limit: 2048             # Cuts off node after limit reached (causes bad cutoff on JSON outputs if hit)
+  big_token_limit: 8192         # Used on more intensive nodes
+  thinking_token_limit: null    #8192 # Default token limit for thinking
+  temperature: 0.6              # Determinism option - lower is more deterministic
+
+code:                      
+  skip_requirements: false      # Straight to codegen on default requiremnets set (developer) 
+  input_review: false           # Module outputs assessment of input requirements
+  tests_review: false           # Enable or disble analysis of tests before code generation
+  max_test_iterations: 2        # Maxmium attempts to generate pytests
+  max_code_iterations: 3        # Maximum attempts to generate code
+  output_pytest: true          # Print Pytest results to terminal
+
+requirements:
+  user_prompt: true             # Normally True, set False if a pre-written prompt is desired for faster R&D
+  auto_skip: false              # Skips any user input stages
+  interview: false              # Set to True to prompt user feedback to aid task scoping
+  interview_question_count: 3   # Prompted questions limit to aid requirements generation
+  raise_assumptions: false
+  cap: 15                       # Prompted requirements limit to prevent requirements degeneration
+  think: false
+
+research: # NOTE: NOT YET IMPLEMENTED!
+  enabled: false                                    # Set to True to enable the research module (analytical hemisphere)
+  provider: tavily                                  # Search provider to use (e.g., tavily, duckduckgo, etc.)
+  max_results: 5                                    # Maximum number of search results to fetch per query
+  api_key: ""                                       # API key for the search provider (if required)
+  relevance_gate_model: granite4:tiny-h             # Model for relevance gate (binary classification)
+  structured_extraction_model: qwen2.5:coder        # Model for structured field extraction
+  user_approval: true                               # Require user approval before proceeding to requirements generation

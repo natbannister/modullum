@@ -12,7 +12,7 @@ from prompt_toolkit.styles import Style
 
 from modullum.core import Node, call_node, schema_to_prompt_hint
 from modullum.core.workspace import ModuleContext
-from modullum import config
+from modullum.config import settings
 
 
 # ── Prompt toolkit style ──────────────────────────────────────────────────────
@@ -102,7 +102,7 @@ TEST_GENERATOR_PROMPT = (
     "\nAlways import the function using: from module import <function_name>. Generate one test per functional requirement."
     "\nNever implement or redefine the function in the test file. The function will be provided separately."
     "\nDo not generate tests that check function signatures or parameter counts."
-    f"\nInclude a comment at the start: # Generated in Modullum with {config.MODEL}"
+    f"\nInclude a comment at the start: # Generated in Modullum with {settings.model_options.model}"
 )
 
 FEEDBACK_PROMPT = (
@@ -116,7 +116,7 @@ FEEDBACK_PROMPT = (
 
 CODE_GENERATOR_PROMPT = (
     "Use the requirements to generate Python code only. No explanation."
-    f"\nInclude a comment at the start: # Generated in Modullum with {config.MODEL}"
+    f"\nInclude a comment at the start: # Generated in Modullum with {settings.model_options.model}"
 )
 
 DIAGNOSIS_PROMPT = (
@@ -124,8 +124,8 @@ DIAGNOSIS_PROMPT = (
     "unit tests running the code. Analyse the failures and populate the 'fixes' list — one entry per failing test."
     "\nIf pytest failed during collection (0 items collected), the error is in the tests, not the code. Fix the error in the tests file."
     "\nIf the pytest fails due to positional arguments errors, check the code function matches the pytest signature. "
-    "\nIf they do not match, use the requirements to determine which is at fault, and the fix required." if not config.TESTS_FEEDBACK else ""
-    "\nCheck tests conform to the requirements before assuming the code is at fault." if not config.TESTS_FEEDBACK else "The code function arguments must match the test signature."
+    "\nIf they do not match, use the requirements to determine which is at fault, and the fix required." if not settings.code.tests_review else ""
+    "\nCheck tests conform to the requirements before assuming the code is at fault." if not settings.code.tests_review else "The code function arguments must match the test signature."
     "\nOnly diagnose issues that directly cause test failures. Ignore style, formatting, and cosmetic issues."
     f"\n{schema_to_prompt_hint(Diagnosis)}"
 )
@@ -226,12 +226,12 @@ def _apply_code_fixes(
     rec = ctx.start_node(
         role="code_repairer",
         prompt=CODE_GENERATOR_PROMPT,
-        model=config.MODEL,
-        stream=config.STREAM_CODE,
+        model=settings.model_options.model,
+        stream=settings.model_options.stream_code,
         think=False,
-        temperature=config.TEMPERATURE,
+        temperature=settings.model_options.temperature,
     )
-    result = call_node(repair_node, stream=config.STREAM_CODE)
+    result = call_node(repair_node, stream=settings.model_options.stream_code)
     rec.finish(
         tokens_in=result.tokens_in,
         tokens_out=result.tokens_out,
@@ -266,12 +266,12 @@ def _apply_test_fixes(
     rec = ctx.start_node(
         role="test_repairer",
         prompt=TEST_GENERATOR_PROMPT,
-        model=config.MODEL,
-        stream=config.STREAM_CODE,
+        model=settings.model_options.model,
+        stream=settings.model_options.stream_code,
         think=False,
-        temperature=config.TEMPERATURE,
+        temperature=settings.model_options.temperature,
     )
-    result = call_node(repair_node, stream=config.STREAM_CODE)
+    result = call_node(repair_node, stream=settings.model_options.stream_code)
     rec.finish(
         tokens_in=result.tokens_in,
         tokens_out=result.tokens_out,
@@ -351,24 +351,24 @@ def run(ctx: ModuleContext, logger: logging.Logger, requirements: str) -> tuple[
     test_generation_iterations = 0
 
     # Developer mode to use default requirements set as provided above
-    if config.SKIP_REQUIREMENTS:
+    if settings.code.skip_requirements:
         requirements = TEMP_REQUIREMENTS
 
     test_gen_rec = ctx.start_node(
         role="test_generator",
         prompt=TEST_GENERATOR_PROMPT,
-        model=config.MODEL,
-        stream=config.STREAM_CODE,
+        model=settings.model_options.model,
+        stream=settings.model_options.stream_code,
         think=False,
-        temperature=config.TEMPERATURE,
+        temperature=settings.model_options.temperature,
     )
     test_gen_llm_total = 0.0
     test_gen_tokens_in = 0
     test_gen_tokens_out = 0
 
-    for iteration in range(config.MAX_TEST_ITERATIONS):
+    for iteration in range(settings.code.max_test_iterations):
 
-        token_limit = config.BIG_TOKEN_LIMIT + (test_generation_iterations * config.TOKEN_LIMIT)
+        token_limit = settings.model_options.big_token_limit + (test_generation_iterations * settings.model_options.token_limit)
 
         logger.info(f"\n--- Test Iteration {iteration + 1} ---\n")
 
@@ -377,7 +377,7 @@ def run(ctx: ModuleContext, logger: logging.Logger, requirements: str) -> tuple[
             test_node.add_assistant(f"Feedback on previous tests:\n{test_feedback}")
 
         test_node.add_user(f"Requirements:\n{requirements}")
-        result = call_node(test_node, stream=config.STREAM_CODE, token_limit=token_limit)
+        result = call_node(test_node, stream=settings.model_options.stream_code, token_limit=token_limit)
         test_gen_llm_total += result.llm_duration_s
         test_gen_tokens_in += result.tokens_in
         test_gen_tokens_out += result.tokens_out
@@ -388,21 +388,21 @@ def run(ctx: ModuleContext, logger: logging.Logger, requirements: str) -> tuple[
             logger.info("\nTests generated.")
             test_generation_iterations = iteration + 1
 
-        if config.TESTS_FEEDBACK:
+        if settings.code.tests_review:
             feedback_node.add_user(f"Requirements:\n{requirements}\nTests:\n{tests}")
 
             feedback_rec = ctx.start_node(
                 role="test_feedback",
                 prompt=FEEDBACK_PROMPT,
-                model=config.MODEL,
-                stream=config.STREAM_JSON,
+                model=settings.model_options.model,
+                stream=settings.model_options.stream_json,
                 think=False,
-                temperature=config.TEMPERATURE,
+                temperature=settings.model_options.temperature,
             )
             fb_result = call_node(
                 feedback_node,
                 ManagerAction,
-                stream=config.STREAM_JSON,
+                stream=settings.model_options.stream_json,
                 token_limit=token_limit,
             )
             feedback_rec.finish(
@@ -451,19 +451,19 @@ def run(ctx: ModuleContext, logger: logging.Logger, requirements: str) -> tuple[
     code_gen_rec = ctx.start_node(
         role="code_generator",
         prompt=CODE_GENERATOR_PROMPT,
-        model=config.MODEL,
-        stream=config.STREAM_CODE,
+        model=settings.model_options.model,
+        stream=settings.model_options.stream_code,
         think=False,
-        temperature=config.TEMPERATURE,
+        temperature=settings.model_options.temperature,
     )
     code_gen_llm_total = 0.0
     code_gen_tokens_in = 0
     code_gen_tokens_out = 0
 
-    for iteration in range(config.MAX_CODE_ITERATIONS):
+    for iteration in range(settings.code.max_code_iterations):
 
         if code_generation_iterations == 0:
-            result = call_node(code_node, stream=config.STREAM_CODE)
+            result = call_node(code_node, stream=settings.model_options.stream_code)
             code_gen_llm_total += result.llm_duration_s
             code_gen_tokens_in += result.tokens_in
             code_gen_tokens_out += result.tokens_out
@@ -475,7 +475,7 @@ def run(ctx: ModuleContext, logger: logging.Logger, requirements: str) -> tuple[
         results = run_tests(code, tests)
         code_generation_iterations = iteration + 1
 
-        if config.OUTPUT_PYTEST_RESULTS:
+        if settings.code.output_pytest:
             logger.info(str(results["output"]))
 
         if results["passed"]:
@@ -483,11 +483,11 @@ def run(ctx: ModuleContext, logger: logging.Logger, requirements: str) -> tuple[
             logger.info(f"\nAll tests passed in {code_generation_iterations} iteration(s).\n")
             break
 
-        if iteration < config.MAX_CODE_ITERATIONS - 1:
+        if iteration < settings.code.max_code_iterations - 1:
             logger.info("\nAnalysing failures...")
 
             diagnosis_node = Node(DIAGNOSIS_PROMPT)
-            prefix = f"Requirements:\n{requirements}\n\n" if not config.TESTS_FEEDBACK else ""
+            prefix = f"Requirements:\n{requirements}\n\n" if not settings.code.tests_review else ""
             diagnosis_node.add_user(
                 f"{prefix}"
                 f"Code:\n{code}\n\n"
@@ -498,12 +498,12 @@ def run(ctx: ModuleContext, logger: logging.Logger, requirements: str) -> tuple[
             diag_rec = ctx.start_node(
                 role="diagnosis",
                 prompt=DIAGNOSIS_PROMPT,
-                model=config.MODEL,
-                stream=config.STREAM_JSON,
+                model=settings.model_options.model,
+                stream=settings.model_options.stream_json,
                 think=False,
-                temperature=config.TEMPERATURE,
+                temperature=settings.model_options.temperature,
             )
-            diag_result = call_node(diagnosis_node, schema=Diagnosis, stream=config.STREAM_JSON)
+            diag_result = call_node(diagnosis_node, schema=Diagnosis, stream=settings.model_options.stream_json)
             diag_rec.finish(
                 tokens_in=diag_result.tokens_in,
                 tokens_out=diag_result.tokens_out,

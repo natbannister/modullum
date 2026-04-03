@@ -7,7 +7,7 @@ from modullum.core import Node, schema_to_prompt_hint, call_node, status_spinner
 from modullum.core.workspace import ModuleContext
 from modullum.core.terminal import get_input, console
 from modullum.core.stream_display import StreamDisplay
-from modullum import config
+from modullum.config import settings
 
 # ── Pydantic schemas ──────────────────────────────────────────────────────────
 
@@ -122,7 +122,7 @@ Generate at least 3 requirements covering invalid inputs and boundaries:
 INTERVIEWER_PROMPT = (
     "The user has requested a task be completed based on their prompt."
     f"\nUsing the complete requirements set definition provided, generate the "
-    f"{config.INTERVIEW_QUESTION_COUNT} most important questions (related to the "
+    f"{settings.requirements.interview_question_count} most important questions (related to the "
     "user's task) to make implications explicit."
     "\nRespond with raw JSON using the model schema. No markdown. No redundant outer brackets, either [] or {}" # qwen3.5 likes to answer in JSON markdown
     "\nDo not generate any answers to the questions."
@@ -131,7 +131,7 @@ INTERVIEWER_PROMPT = (
 REQUIREMENTS_GENERATOR_PROMPT = (
     "The user has requested a task be completed based on their prompt."
     f"\nUsing the complete requirements set definition provided, generate a list of "
-    f"requirements (STOP AFTER {config.REQUIREMENTS_CAP} REQUIREMENTS)."
+    f"requirements (STOP AFTER {settings.requirements.cap} REQUIREMENTS)."
     f"\n{schema_to_prompt_hint(RequirementsList)}"
 )
 
@@ -157,7 +157,7 @@ def run(ctx: ModuleContext, logger: logging.Logger) -> RequirementsList:
     """
 
     # ── Get initial task ──────────────────────────────────────────────────────
-    if config.USER_PROMPT:
+    if settings.requirements.user_prompt:
         initial_prompt, user_wait_s = get_input()
         ctx.add_user_wait(user_wait_s)
     else:
@@ -177,19 +177,19 @@ def run(ctx: ModuleContext, logger: logging.Logger) -> RequirementsList:
     # ── Interview ─────────────────────────────────────────────────────────────
     interview_question_count = 0
 
-    if config.INTERVIEW:
+    if settings.requirements.interview:
         interviewer_node.add_user(f"Task:\n{initial_prompt}")
 
         rec = ctx.start_node(
             role="interviewer",
             prompt=INTERVIEWER_PROMPT,
-            model=config.MODEL,
+            model=settings.model_options.model,
             stream=False,
             think=False,
-            temperature=config.TEMPERATURE,
+            temperature=settings.model_options.temperature,
         )
         with status_spinner("\nJust a moment..."):
-            result = call_node(interviewer_node, QuestionsList, model=config.MODEL)
+            result = call_node(interviewer_node, QuestionsList, model=settings.model_options.model)
         rec.finish(
             tokens_in=result.tokens_in,
             tokens_out=result.tokens_out,
@@ -206,7 +206,7 @@ def run(ctx: ModuleContext, logger: logging.Logger) -> RequirementsList:
         logger.info("\nBefore we begin, I have a few questions.\n")
         for q in questions_json.questions:
             logger.info(f"\n{q.question}")
-            if not config.AUTO_SKIP:
+            if not settings.requirements.auto_skip:
                 answer, user_wait_s = get_input("Your answer")
                 answer = answer.strip()
                 ctx.add_user_wait(user_wait_s)
@@ -218,7 +218,7 @@ def run(ctx: ModuleContext, logger: logging.Logger) -> RequirementsList:
         assumptions_node.add_assistant(scope_info)
 
     # ── Assumptions ───────────────────────────────────────────────────────────
-    if config.ASSUMPTIONS_USER_REVIEW:
+    if settings.requirements.raise_assumptions:
         assumptions_node.add_user(f"Task:\n{initial_prompt}")
         assumptions_iterations = 1
         user_satisfied = False
@@ -229,17 +229,17 @@ def run(ctx: ModuleContext, logger: logging.Logger) -> RequirementsList:
         rec = ctx.start_node(
             role="assumptions",
             prompt=ASSUMPTIONS_ANALYSER_PROMPT,
-            model=config.MODEL,
-            stream=config.STREAM_USER_FACING,
+            model=settings.model_options.model,
+            stream=settings.model_options.stream_user_facing,
             think=False,
-            temperature=config.TEMPERATURE,
+            temperature=settings.model_options.temperature,
         )
 
         while not user_satisfied:
             result = call_node(
                 assumptions_node,
-                stream=config.STREAM_USER_FACING,
-                model=config.MODEL,
+                stream=settings.model_options.stream_user_facing,
+                model=settings.model_options.model,
             )
             assumptions_llm_total += result.llm_duration_s
             assumptions_tokens_in += result.tokens_in
@@ -250,7 +250,7 @@ def run(ctx: ModuleContext, logger: logging.Logger) -> RequirementsList:
             logger.info("\nSpecify changes to the assumptions, or press Enter to accept.\n")
 
             user_feedback = ""
-            if not config.AUTO_SKIP:
+            if not settings.requirements.auto_skip:
                 user_feedback, user_wait_s = get_input()
                 ctx.add_user_wait(user_wait_s)
 
@@ -287,10 +287,10 @@ def run(ctx: ModuleContext, logger: logging.Logger) -> RequirementsList:
     rec = ctx.start_node(
         role="generator",
         prompt=REQUIREMENTS_GENERATOR_PROMPT,
-        model=config.MODEL,
-        stream=config.STREAM_REQUIREMENTS_GEN,
-        think=config.REQUIREMENTS_GEN_THINK,
-        temperature=config.TEMPERATURE,
+        model=settings.model_options.model,
+        stream=settings.model_options.stream_json,
+        think=settings.requirements.think,
+        temperature=settings.model_options.temperature,
     )
 
     while not user_satisfied:
@@ -298,9 +298,9 @@ def run(ctx: ModuleContext, logger: logging.Logger) -> RequirementsList:
             with StreamDisplay() as display:
                 result = call_node(
                     generator_node, RequirementsList,
-                    think=config.REQUIREMENTS_GEN_THINK,
-                    stream=config.STREAM_REQUIREMENTS_GEN,
-                    model=config.MODEL,
+                    think=settings.requirements.think,
+                    stream=settings.model_options.stream_json,
+                    model=settings.model_options.model,
                     stream_display=display,
                 )
         generator_llm_total += result.llm_duration_s
@@ -313,7 +313,7 @@ def run(ctx: ModuleContext, logger: logging.Logger) -> RequirementsList:
         logger.info("\nSpecify changes to the requirements, or press Enter to accept.\n")
 
         user_feedback = ""
-        if not config.AUTO_SKIP:
+        if not settings.requirements.auto_skip:
             user_feedback, user_wait_s = get_input()
             ctx.add_user_wait(user_wait_s)
 

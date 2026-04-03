@@ -4,8 +4,7 @@ import time
 import sys
 from typing import NamedTuple, Any
 from pydantic import ValidationError
-from modullum import config
-
+from modullum.config import settings
 
 class NodeResult(NamedTuple):
     """
@@ -191,7 +190,7 @@ def salvage_truncated_json(content: str) -> str:
     return content + (']' * depth_bracket) + ('}' * depth_brace)
 
 def supports_thinking(model: str) -> bool:
-    return any(model.startswith(m) or m in model for m in config.THINKING_MODELS)
+    return any(model.startswith(m) or m in model for m in settings.models.thinking)
 
 def _stream_response(response, thinking_enabled: bool, writer=None) -> tuple[str, int, int]:
     """
@@ -250,9 +249,9 @@ def call_node(
     schema=None,
     think: bool = False,
     stream: bool = False,
-    temperature: float = config.TEMPERATURE,
+    temperature: float = settings.model_options.temperature,
     token_limit: int = None,
-    model: str = config.MODEL,
+    model: str = settings.model_options.model,
     stream_display = None,
 ) -> NodeResult:
     """
@@ -265,7 +264,7 @@ def call_node(
     """
 
     thinking_enabled = think and supports_thinking(model)
-    token_limit = token_limit or (config.THINKING_TOKEN_LIMIT if thinking_enabled else config.TOKEN_LIMIT)
+    token_limit = token_limit or (settings.model_options.thinking_token_limit if thinking_enabled else settings.model_options.token_limit)
 
     t0 = time.monotonic()
     response = ollama.chat(

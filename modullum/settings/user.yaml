@@ -1,0 +1,11 @@
+model_options:
+  model: granite4:tiny-h
+  temperature: 0.8
+
+code:
+  skip_requirements: false
+
+requirements:
+  user_prompt: false
+  auto_skip: true
+  interview: false

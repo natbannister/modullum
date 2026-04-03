@@ -3,7 +3,7 @@ import logging
 
 from modullum.core.workspace import RunContext
 from modullum.modules import requirements_gen, code_gen, scope_manager
-from modullum import config
+from modullum.config import settings
 
 
 class HeadAgent:
@@ -27,7 +27,7 @@ class HeadAgent:
             self.logger.info("\nLet's get started.\n")
 
             # ── Requirements ──────────────────────────────────────────────────
-            if config.SKIP_REQUIREMENTS:
+            if settings.code.skip_requirements:
                 requirements_json = ""
 
             else:
