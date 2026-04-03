@@ -50,9 +50,8 @@ class Node:
         return self.history[-1]["content"] if self.history else None
 
 def strip_code_fences(text: str) -> str:
-    """Strips markdown fences for python and json outputs."""
-    # NOTE: '|json' can be removed, this function is not sufficient for JSON enforcement.
-    match = re.search(r'```(?:python|json)?\n(.*?)```', text, re.DOTALL)
+    """Extracts content inside markdown fences and discards everything else."""
+    match = re.search(r'^.*?```(?:python|json)?\n(.*?)```.*$', text, re.DOTALL)
     return match.group(1) if match else text
 
 def flatten_schema(schema: dict) -> dict:

@@ -6,7 +6,7 @@ from pydantic import Field
 from modullum.core import Node, schema_to_prompt_hint, call_node, status_spinner
 from modullum.core.workspace import ModuleContext
 from modullum.core.terminal import get_input, console
-from modullum.core.stream_display import StreamDisplay
+from modullum.core.pane_display import StreamDisplay
 from modullum.config import settings
 
 # ── Pydantic schemas ──────────────────────────────────────────────────────────
@@ -295,13 +295,13 @@ def run(ctx: ModuleContext, logger: logging.Logger) -> RequirementsList:
 
     while not user_satisfied:
         with status_spinner("Generating requirements...\n"):
-            with StreamDisplay() as display:
+            with StreamDisplay(autoclose=False, fallback=logger.info) as pane:
                 result = call_node(
                     generator_node, RequirementsList,
                     think=settings.requirements.think,
                     stream=settings.model_options.stream_json,
                     model=settings.model_options.model,
-                    stream_display=display,
+                    stream_display=pane,
                 )
         generator_llm_total += result.llm_duration_s
         generator_tokens_in += result.tokens_in

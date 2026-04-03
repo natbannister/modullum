@@ -1,5 +1,6 @@
 import logging
 import re
+import sys
 import subprocess
 import tempfile
 from pathlib import Path
@@ -10,8 +11,9 @@ from pydantic import BaseModel
 from prompt_toolkit import prompt
 from prompt_toolkit.styles import Style
 
-from modullum.core import Node, call_node, schema_to_prompt_hint
+from modullum.core import Node, schema_to_prompt_hint, call_node, status_spinner
 from modullum.core.workspace import ModuleContext
+from modullum.core.pane_display import PaneDisplay, StreamDisplay
 from modullum.config import settings
 
 
@@ -27,35 +29,42 @@ def get_input(placeholder: str = "Send a message") -> str:
 # ── Pydantic schemas ──────────────────────────────────────────────────────────
 
 class FailedNode(str, Enum):
-
-    # NOTE: Currently not implemented due to previous JSON non-adherence but MAY work now JSON more strictly enforced.
-    # NOTE: If re-implementing, insert into failed_node in DiagnosedFix (below).
-
     code = "code"
     tests = "tests"
-    missing_dependency = "missing_dependency" # If a test requires a dependency that's not installed
+    missing_dependency = "missing_dependency"
 
     def __str__(self):
         return self.value
 
 
-class DiagnosedFix(BaseModel):
-    #target_test: str = Field(description="The name of the failing test")
-    failed_node: FailedNode #= Field(description="'tests' or 'code'")
-    #failed_node: str = Field(description="'tests' or 'code'")
-    #diagnosis: str
+class RootCause(BaseModel):
+    failed_node: FailedNode = Field(description="Which component has the bug: 'code', 'tests', or 'missing_dependency'")
+    diagnosis: str = Field(description="Explanation of the root cause")
     fix: str = Field(description="Plain text description of the fix")
     code_snippet: str | None = Field(default=None, description="Optional illustrative code snippet for the fix")
+    resolves_tests: list[str] = Field(description="List of test names that will pass once this fix is applied")
+
 
 class Diagnosis(BaseModel):
-    fixes: list[DiagnosedFix]
+    root_causes: list[RootCause] = Field(
+        description="List of distinct root causes. Multiple test failures may share the same root cause."
+    )
 
     def __str__(self):
-        return "\n\n".join(
-            f"[{f.failed_node}]\nFix: {f.fix}"
-            + (f"\n```python\n{f.code_snippet}\n```" if f.code_snippet else "")
-            for f in self.fixes
-        )
+        output = []
+        for rc in self.root_causes:
+            tests_str = ", ".join(rc.resolves_tests)
+            block = (
+                f"[{rc.failed_node}]\n"
+                f"Diagnosis: {rc.diagnosis}\n"
+                f"Fix: {rc.fix}\n"
+                f"Resolves: {tests_str}"
+            )
+            if rc.code_snippet:
+                block += f"\n```python\n{rc.code_snippet}\n```"
+            output.append(block)
+        return "\n\n".join(output)
+    
 
 class TestReview(BaseModel):
     test_name: str
@@ -66,6 +75,19 @@ class TestReview(BaseModel):
 
     def __str__(self):
         return f"[Test: {self.test_name}][Requirement: {self.requirement_id}][Conformance: {self.conformance}]\n[Reason: {self.reason}]\n[Amendment: {self.amendment}]"
+
+
+class TestResult:
+    def __init__(self, tests: list[dict], failures: list[dict]):
+        self.tests = tests
+        self.failures = failures
+        self.passed = all(t["status"] == "PASSED" for t in tests) if len(tests)>=1 else False
+
+    def has_failures(self):
+        return bool(self.failures)
+
+    def failure_count(self):
+        return len(self.failures)
 
 
 class ManagerAction(BaseModel):
@@ -106,12 +128,35 @@ TEST_GENERATOR_PROMPT = (
 )
 
 FEEDBACK_PROMPT = (
-    "Use the requirements list to determine whether each test provided (1) correctly identifies whether the "
-    "requirement(s) will be satisfied by a separate function designed to meet the requirement, (2) does not "
-    "contain any syntactical or logical errors and (3) is not vacuous."
-    "\n Check for argument position errors."
-    "\n Tests are approved once all are conformant."
-    f"\n{schema_to_prompt_hint(ManagerAction)}"
+    "You are reviewing unit tests against their requirements. For each test, verify:\n"
+    "\n"
+    "1. REQUIREMENT MAPPING:\n"
+    "   - Identify which requirement(s) (REQ-XXX) this test validates\n"
+    "   - If multiple tests validate the same requirement, flag as redundant unless testing different edge cases\n"
+    "   - Flag if any requirement has no corresponding test\n"
+    "\n"
+    "2. INPUT CORRECTNESS:\n"
+    "   - If a requirement specifies exact parameter values, verify the test uses those EXACT values\n"
+    "   - Parse test names for claimed scenarios (e.g., 'when_X_is_zero') and verify parameter X actually equals zero in the test call\n"
+    "   - Check argument positions match function signature - especially critical for functions with many parameters\n"
+    "\n"
+    "3. ASSERTION CORRECTNESS:\n"
+    "   - Verify assertions match what the requirement mandates\n"
+    "   - Check that all conditions in a requirement are tested (if requirement has multiple 'SHALL' clauses, all must be checked)\n"
+    "   - Ensure tolerances match requirement specifications (e.g., 'within 1e-6' in requirement = use 1e-6 in assertion)\n"
+    "\n"
+    "4. TECHNICAL VALIDITY:\n"
+    "   - No syntax errors\n"
+    "   - No logical errors (e.g., assert always True, assert unreachable)\n"
+    "   - Not vacuous (actually tests something meaningful)\n"
+    "   - Proper use of pytest features (pytest.raises, pytest.approx, etc.)\n"
+    "\n"
+    "5. COMPLETENESS:\n"
+    "   - Each requirement must have at least one test that validates it\n"
+    "   - Tests with specific parameter values (like REQ-010) need a dedicated test with those exact inputs\n"
+    "\n"
+    "Tests are approved once all are conformant. If issues found, provide specific fixes.\n"
+    f"{schema_to_prompt_hint(ManagerAction)}"
 )
 
 CODE_GENERATOR_PROMPT = (
@@ -119,16 +164,35 @@ CODE_GENERATOR_PROMPT = (
     f"\nInclude a comment at the start: # Generated in Modullum with {settings.model_options.model}"
 )
 
-DIAGNOSIS_PROMPT = (
-    "You will receive a set of requirements, the code generated from those requirements, and the results from "
-    "unit tests running the code. Analyse the failures and populate the 'fixes' list — one entry per failing test."
-    "\nIf pytest failed during collection (0 items collected), the error is in the tests, not the code. Fix the error in the tests file."
-    "\nIf the pytest fails due to positional arguments errors, check the code function matches the pytest signature. "
-    "\nIf they do not match, use the requirements to determine which is at fault, and the fix required." if not settings.code.tests_review else ""
-    "\nCheck tests conform to the requirements before assuming the code is at fault." if not settings.code.tests_review else "The code function arguments must match the test signature."
-    "\nOnly diagnose issues that directly cause test failures. Ignore style, formatting, and cosmetic issues."
-    f"\n{schema_to_prompt_hint(Diagnosis)}"
-)
+DIAGNOSIS_PROMPT = ("""
+For each failing test:
+
+1. **Verify test validity first:**
+   - Parse the test name to understand what scenario it claims to test
+   - Check if the actual function call matches that scenario
+   - For tests named "when X is Y", verify parameter X actually equals Y
+   - Flag if test inputs don't match test name claims
+
+2. **Trace execution order in code:**
+   - Does the function modify state after validation checks?
+   - Are special case handlers before or after assertions?
+   - Could overwriting variables invalidate earlier checks?
+
+3. **Look for suspicious patterns:**
+   - Multiple tests with identical inputs but different expectations
+   - Hardcoded values that match failure outputs
+   - Control flow that skips or bypasses calculations
+                    
+
+4. **Map failures to requirements:**
+   - Which REQ-XXX does this test validate?
+   - Does the code implement that requirement correctly?
+   - If test matches requirement but fails, bug is in CODE
+   - If test contradicts requirement, bug is in TESTS
+
+   Requirements are authoritative. Tests that correctly validate requirements are correct by definition.
+"""
+f"{schema_to_prompt_hint(Diagnosis)}")
 
 # TEMPORARY REQUIREMENTS TO SPEED UP DEVELOPMENT:
 TEMP_REQUIREMENTS = """
@@ -177,38 +241,125 @@ REQ-010: For S=999, E=0, I=1, R=0, N=1000, beta=0.3, sigma=0.1, gamma=0.05, dt=1
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def run_tests(code: str, tests: str) -> dict:
+def clean_failure_line(line: str) -> str:
+    """Strip long temp paths from pytest output."""
+    # Replace any absolute path with just the filename and line
+    line = re.sub(r'(/[^:\s]+)+/', '', line)
+    return line
+
+
+def parse_pytest_output(output: str) -> TestResult:
+    """
+    Parse pytest output into structured results:
+      - tests: all tests with status
+      - failures: failed tests with full cleaned context
+      - summary: concise logging summary
+    """
+
+    print(output)
+
+    lines = output.strip().splitlines()
+    tests = []
+    failures = []
+
+    test_line_pattern = re.compile(r"::(.+?)\s+(PASSED|FAILED|ERROR)(?=\s|\[|$)")
+
+    for line_num, line in enumerate(lines):
+
+        # Match test result lines
+        match = test_line_pattern.search(line)
+        if match:
+            test_name, status = match.groups()
+            tests.append({"name": test_name, "status": status})
+
+    # Handle case where no tests were parsed but output exists
+    if not tests and output.strip():
+        print(f"Warning: Could not parse any tests from output:\n")
+        for i, line in enumerate(lines):
+            print(f"{i}: {repr(line)}")
+
+    # Parse failures (failed line + reason)
+    failures_text = output.partition("FAILURES")[2] # The text following "FAILURES" if present. "" if not.
+    
+    # Gather each failure block in the failures section
+    failure_blocks = re.split(r"_+\s+(.+?)\s+_+\n", failures_text)
+
+    for i in range(1, len(failure_blocks), 2):
+        test_name = failure_blocks[i].strip()
+        block = failure_blocks[i + 1]
+
+        lines = block.splitlines()
+
+        failure_message_lines = []
+        failure_message_reasons = []
+
+        in_failure = False
+        for line in lines:
+            stripped = line.lstrip()   # remove leading whitespace
+            if stripped.startswith("> "):
+                in_failure = True
+                cleaned_line = re.sub(r"^>\s+", "", stripped)
+                failure_message_lines.append(cleaned_line)
+            elif in_failure and stripped.startswith("E "):
+                cleaned_line = re.sub(r"^E\s+", "", stripped)
+                failure_message_reasons.append(cleaned_line)
+            elif in_failure and stripped.startswith("_"):
+                # _ denotes a new failed test section
+                break
+
+        failure_message = "\n".join(failure_message_lines)
+        failure_reason = "\n".join(failure_message_reasons)
+
+        failures.append({
+            "test_name": test_name,
+            "failed_line": failure_message,
+            "reason": failure_reason,
+        })
+
+    return TestResult(tests=tests, failures=failures)
+
+
+def run_tests(code: str, tests: str) -> TestResult:
     with tempfile.TemporaryDirectory() as tmpdir:
-        with open(f"{tmpdir}/module.py", "w") as f:
-            f.write(code)
-        with open(f"{tmpdir}/test_module.py", "w") as f:
-            f.write(re.sub(r'from \w+ import', 'from module import', tests))
+        tmpdir_path = Path(tmpdir)
 
-        result = subprocess.run(
-            ["python3", "-m", "pytest", f"{tmpdir}/test_module.py", "-v"],
-            capture_output=True, text=True,
-            cwd=tmpdir,
-        )
+        # Write module
+        module_path = tmpdir_path / "module.py"
+        module_path.write_text(code)
 
-        return {
-            "passed": result.returncode == 0,
-            "output": result.stdout + result.stderr,
-        }
+        # Write test file
+        test_path = tmpdir_path / "test_module.py"
+        modified_tests = re.sub(r'from \w+ import', 'from module import', tests)
+        test_path.write_text(modified_tests)
+
+        try:
+            result = subprocess.run(
+                [sys.executable, "-m", "pytest", str(test_path), "-v"],
+                capture_output=True,
+                text=True,
+                cwd=tmpdir,
+            )
+        except FileNotFoundError:
+            raise RuntimeError(f"pytest is not installed in Python interpreter: {sys.executable}")
+
+        output = result.stdout + "\n" + result.stderr
+
+        return parse_pytest_output(output)
 
 
-def _format_fixes(fixes: list[DiagnosedFix]) -> str:
-    """Renders a list of DiagnosedFix objects into a concise prompt-ready string."""
+def _format_fixes(root_causes: list[RootCause]) -> str:
+    """Renders a list of RootCause objects into a concise prompt-ready string."""
     return "\n\n".join(
         f"[{f.failed_node}] {f.fix}"
         + (f"\n```python\n{f.code_snippet}\n```" if f.code_snippet else "")
-        for f in fixes
+        for f in root_causes
     )
 
 
 def _apply_code_fixes(
     code: str,
     requirements: str,
-    fixes: list[DiagnosedFix],
+    root_causes: list[RootCause],
     ctx: ModuleContext,
 ) -> tuple[Node, str]:
     """
@@ -221,7 +372,7 @@ def _apply_code_fixes(
     repair_node.add_user(
         f"Requirements:\n{requirements}\n\n"
         f"Current code:\n{code}\n\n"
-        f"Apply the following fixes, do NOT change any other code:\n{_format_fixes(fixes)}"
+        f"Apply the following fixes, do NOT change any other code:\n{_format_fixes(root_causes)}"
     )
     rec = ctx.start_node(
         role="code_repairer",
@@ -248,7 +399,7 @@ def _apply_code_fixes(
 def _apply_test_fixes(
     tests: str,
     requirements: str,
-    fixes: list[DiagnosedFix],
+    root_causes: list[RootCause],
     ctx: ModuleContext,
 ) -> tuple[Node, str]:
     """
@@ -261,7 +412,7 @@ def _apply_test_fixes(
     repair_node.add_user(
         f"Requirements:\n{requirements}\n\n"
         f"Current tests:\n{tests}\n\n"
-        f"Apply the following fixes ONLY:\n{_format_fixes(fixes)}"
+        f"Apply the following fixes ONLY:\n{_format_fixes(root_causes)}"
     )
     rec = ctx.start_node(
         role="test_repairer",
@@ -300,9 +451,9 @@ def _dispatch_fixes(
     Both sides can be repaired in the same iteration if the diagnosis targets both.
     """
     # Revert to using FailedNode in the future if the code/tests flagging doesn't work
-    code_fixes = [f for f in diagnosis.fixes if f.failed_node == "code"]
-    test_fixes = [f for f in diagnosis.fixes if f.failed_node == "tests"]
-    dependency_fix = [f for f in diagnosis.fixes if f.failed_node == "missing_dependency"]
+    code_fixes = [f for f in diagnosis.root_causes if f.failed_node == "code"]
+    test_fixes = [f for f in diagnosis.root_causes if f.failed_node == "tests"]
+    dependency_fix = [f for f in diagnosis.root_causes if f.failed_node == "missing_dependency"]
 
     if code_fixes:
         logger.info(f"\n  Applying {len(code_fixes)} code fix(es)...")
@@ -377,11 +528,21 @@ def run(ctx: ModuleContext, logger: logging.Logger, requirements: str) -> tuple[
             test_node.add_assistant(f"Feedback on previous tests:\n{test_feedback}")
 
         test_node.add_user(f"Requirements:\n{requirements}")
-        result = call_node(test_node, stream=settings.model_options.stream_code, token_limit=token_limit)
+
+        with status_spinner("Generating tests...\n"):
+            with StreamDisplay(autoclose=True, fallback=logger.info) as pane:
+                result = call_node(test_node, 
+                                stream=settings.model_options.stream_code, 
+                                token_limit=token_limit,
+                                model=settings.model_options.model,
+                                stream_display=pane,
+                                )
         test_gen_llm_total += result.llm_duration_s
         test_gen_tokens_in += result.tokens_in
         test_gen_tokens_out += result.tokens_out
         tests = result.output
+
+        logger.info(f"\nGENERATED TESTS:\n{tests}")
 
         if tests:
             last_tests = tests
@@ -399,12 +560,15 @@ def run(ctx: ModuleContext, logger: logging.Logger, requirements: str) -> tuple[
                 think=False,
                 temperature=settings.model_options.temperature,
             )
-            fb_result = call_node(
-                feedback_node,
-                ManagerAction,
-                stream=settings.model_options.stream_json,
-                token_limit=token_limit,
-            )
+            with status_spinner("Generating feedback for tests...\n"):
+                with StreamDisplay(autoclose=True, fallback=logger.info) as pane:
+                    fb_result = call_node(
+                        feedback_node,
+                        ManagerAction,
+                        stream=settings.model_options.stream_json,
+                        token_limit=token_limit,
+                        stream_display=pane,
+                    )
             feedback_rec.finish(
                 tokens_in=fb_result.tokens_in,
                 tokens_out=fb_result.tokens_out,
@@ -414,7 +578,10 @@ def run(ctx: ModuleContext, logger: logging.Logger, requirements: str) -> tuple[
                 output=str(fb_result.output),
             )
             ctx.record_node(feedback_rec)
+
             test_feedback = fb_result.output
+            
+            logger.info(f"\nTESTS FEEDBACK:\n{test_feedback}")
 
             if test_feedback.approved:
                 criteria_approved = True
@@ -463,7 +630,13 @@ def run(ctx: ModuleContext, logger: logging.Logger, requirements: str) -> tuple[
     for iteration in range(settings.code.max_code_iterations):
 
         if code_generation_iterations == 0:
-            result = call_node(code_node, stream=settings.model_options.stream_code)
+            with status_spinner("Generating code...\n"):
+                with StreamDisplay(autoclose=True, fallback=logger.info) as pane:
+                    result = call_node(code_node, 
+                                    stream=settings.model_options.stream_code,
+                                    model=settings.model_options.model,
+                                    stream_display=pane,
+                                    )
             code_gen_llm_total += result.llm_duration_s
             code_gen_tokens_in += result.tokens_in
             code_gen_tokens_out += result.tokens_out
@@ -475,10 +648,20 @@ def run(ctx: ModuleContext, logger: logging.Logger, requirements: str) -> tuple[
         results = run_tests(code, tests)
         code_generation_iterations = iteration + 1
 
-        if settings.code.output_pytest:
-            logger.info(str(results["output"]))
+        with PaneDisplay(autoclose=False, fallback=logger.info) as pane:
+            if settings.code.output_pytest:
+                # Show full pytest output
+                #pane.write(str(results.get("output", results.get("summary", ""))))
+                pane.write(f"\n{results.passed}\n")
+                pane.write(f"\n{results.tests}\n")
+                pane.write(f"\n{results.failures}\n")
+            else:
+                # Show only the concise summary
+                pane.write(str(results.get("summary", "")))
 
-        if results["passed"]:
+        logger.info(f"\nPassed: {results.passed}\nTests: {results.tests}\nFailures: {results.failures}")
+
+        if results.passed:
             passed = True
             logger.info(f"\nAll tests passed in {code_generation_iterations} iteration(s).\n")
             break
@@ -487,12 +670,14 @@ def run(ctx: ModuleContext, logger: logging.Logger, requirements: str) -> tuple[
             logger.info("\nAnalysing failures...")
 
             diagnosis_node = Node(DIAGNOSIS_PROMPT)
-            prefix = f"Requirements:\n{requirements}\n\n" if not settings.code.tests_review else ""
+            prefix = f"Requirements:\n{requirements}\n\n" #if not settings.code.tests_review else ""
             diagnosis_node.add_user(
                 f"{prefix}"
                 f"Code:\n{code}\n\n"
-                f"Test output:\n{results['output']}\n\n"
-                "Populate the 'fixes' list for each failing test. Answer in JSON format."
+                f"Test failures:\n{results.failures}\n\n"
+                "Analyse all failures to identify root causes. Multiple test failures may share "
+                "the same root cause. If one code change would fix multiple test failures, only include "
+                "that fix once. Explain which tests each fix will resolve."
             )
 
             diag_rec = ctx.start_node(

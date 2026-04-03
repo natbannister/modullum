@@ -19,10 +19,10 @@ model_options:
 code:                      
   skip_requirements: false      # Straight to codegen on default requiremnets set (developer) 
   input_review: false           # Module outputs assessment of input requirements
-  tests_review: false           # Enable or disble analysis of tests before code generation
-  max_test_iterations: 2        # Maxmium attempts to generate pytests
+  tests_review: true           # Enable or disble analysis of tests before code generation
+  max_test_iterations: 5        # Maxmium attempts to generate pytests
   max_code_iterations: 3        # Maximum attempts to generate code
-  output_pytest: true          # Print Pytest results to terminal
+  output_pytest: true           # Print Pytest results to terminal
 
 requirements:
   user_prompt: true             # Normally True, set False if a pre-written prompt is desired for faster R&D

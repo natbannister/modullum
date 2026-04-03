@@ -76,18 +76,20 @@ def setup_logger(
     streaming: bool = False,
     char_delay: float = 0.01,
     newline_delay: float = 0.05,
+    silent: bool = False,
 ) -> logging.Logger:
     logger = logging.getLogger("run_logger")
     logger.setLevel(logging.DEBUG)
 
-    # Terminal handler — optionally streaming, no timestamps
-    console_handler = StreamingConsoleHandler(
-        streaming=streaming,
-        char_delay=char_delay,
-        newline_delay=newline_delay,
-    )
-    console_handler.setFormatter(logging.Formatter('%(message)s'))
-    logger.addHandler(console_handler)
+    # Terminal handler — optionally streaming, no timestamps (skip if silent)
+    if not silent:
+        console_handler = StreamingConsoleHandler(
+            streaming=streaming,
+            char_delay=char_delay,
+            newline_delay=newline_delay,
+        )
+        console_handler.setFormatter(logging.Formatter('%(message)s'))
+        logger.addHandler(console_handler)
 
     # File handler — instant, with timestamps
     file_handler = logging.FileHandler(log_file)

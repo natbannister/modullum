@@ -2,6 +2,7 @@ from pathlib import Path
 import logging
 
 from modullum.core.workspace import RunContext
+from modullum.core import close_extra_tmux_panes
 from modullum.modules import requirements_gen, code_gen, scope_manager
 from modullum.config import settings
 
@@ -56,3 +57,5 @@ class HeadAgent:
         finally:
             ctx.finalise(task=task, exit_reason=exit_reason)
             self.logger.info(f"\nRun {ctx.serial} finalised — {exit_reason}.")
+            input("Press Enter to close panes and exit Modullum.")
+            close_extra_tmux_panes()
