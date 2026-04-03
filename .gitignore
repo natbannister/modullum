@@ -26,4 +26,4 @@ venv/
 runs/
 
 # User config
-settings/user.yaml
+**/user.yaml
