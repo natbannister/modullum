@@ -49,10 +49,46 @@ class Node:
     def last_response(self) -> str | None:
         return self.history[-1]["content"] if self.history else None
 
+import re
+
 def strip_code_fences(text: str) -> str:
-    """Extracts content inside markdown fences and discards everything else."""
-    match = re.search(r'^.*?```(?:python|json)?\n(.*?)```.*$', text, re.DOTALL)
-    return match.group(1) if match else text
+    # Replaces original implementation, made by {devstral-small-2:24b}
+    """
+    Extracts content inside markdown fences, handling various edge cases:
+    - Uneven numbers of backticks
+    - Missing language specifiers
+    - Multiple code blocks (returns first one)
+    - Extra text before/after fences
+    - Fences with different numbers of backticks (``` vs ````)
+    """
+    # Pattern explanation:
+    # 1. ^.*? - any characters before first fence (non-greedy)
+    # 2. (`{3,}) - 3 or more backticks (captured as group 1)
+    # 3. (?:[^\n]*\n)? - optional language specifier line
+    # 4. (.*?) - content inside (non-greedy, captured as group 2)
+    # 5. \1 - same number of backticks as opening
+    # 6. .*$ - any characters after closing fence
+    pattern = r'^.*?(`{3,})(?:[^\n]*\n)?(.*?)\1.*$'
+
+    match = re.search(pattern, text, re.DOTALL)
+    if match:
+        return match.group(2).strip()  # strip to remove any leading/trailing whitespace
+
+    # Fallback patterns for common edge cases
+    fallback_patterns = [
+        r'```.*?\n(.*?)```',  # Standard case
+        r'````.*?\n(.*?)````',  # 4 backticks
+        r'```(.*?)```',  # No newline after opening
+        r'^(.*?)$',  # No fences at all (return whole string)
+    ]
+
+    for pattern in fallback_patterns:
+        match = re.search(pattern, text, re.DOTALL)
+        if match:
+            return match.group(1).strip()
+
+    return text.strip()  # Final fallback
+
 
 def flatten_schema(schema: dict) -> dict:
     """
@@ -284,7 +320,7 @@ def call_node(
 
     llm_duration_s = round(time.monotonic() - t0, 3)
 
-    content = strip_code_fences(content) # TODO: Might want to remove this and the method and put it back in the code gen module
+    content = strip_code_fences(content)
 
     if not schema:
         return NodeResult(
