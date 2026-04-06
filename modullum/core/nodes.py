@@ -49,46 +49,29 @@ class Node:
     def last_response(self) -> str | None:
         return self.history[-1]["content"] if self.history else None
 
-import re
-
-def strip_code_fences(text: str) -> str:
-    # Replaces original implementation, made by {devstral-small-2:24b}
-    """
-    Extracts content inside markdown fences, handling various edge cases:
-    - Uneven numbers of backticks
-    - Missing language specifiers
-    - Multiple code blocks (returns first one)
-    - Extra text before/after fences
-    - Fences with different numbers of backticks (``` vs ````)
-    """
-    # Pattern explanation:
-    # 1. ^.*? - any characters before first fence (non-greedy)
-    # 2. (`{3,}) - 3 or more backticks (captured as group 1)
-    # 3. (?:[^\n]*\n)? - optional language specifier line
-    # 4. (.*?) - content inside (non-greedy, captured as group 2)
-    # 5. \1 - same number of backticks as opening
-    # 6. .*$ - any characters after closing fence
-    pattern = r'^.*?(`{3,})(?:[^\n]*\n)?(.*?)\1.*$'
-
+def extract_fenced_content(text: str) -> str:
+    """Extracts content inside the first markdown code fence."""
+    pattern = r'(`{3,})(?:[^\n]*\n)?(.*?)(?:\1|$)'
     match = re.search(pattern, text, re.DOTALL)
-    if match:
-        return match.group(2).strip()  # strip to remove any leading/trailing whitespace
+    return match.group(2).strip() if match else text.strip()
 
-    # Fallback patterns for common edge cases
-    fallback_patterns = [
-        r'```.*?\n(.*?)```',  # Standard case
-        r'````.*?\n(.*?)````',  # 4 backticks
-        r'```(.*?)```',  # No newline after opening
-        r'^(.*?)$',  # No fences at all (return whole string)
-    ]
+def extract_multiple_fenced_content(text: str) -> list[str]:
+    # This is not actually used, but good to have
+    """
+    Extracts all markdown code blocks from a string.
+    
+    Returns a list of strings, each being the content of one code block.
+    Handles:
+    - Different numbers of backticks (``` or more)
+    - Optional language specifiers
+    - Extra text outside code blocks
+    """
+    # Match opening fence (`{3,}`), optional language, capture content, match same closing fence
+    pattern = r'(`{3,})(?:[^\n]*\n)?(.*?)\1'
+    matches = re.findall(pattern, text, re.DOTALL)
 
-    for pattern in fallback_patterns:
-        match = re.search(pattern, text, re.DOTALL)
-        if match:
-            return match.group(1).strip()
-
-    return text.strip()  # Final fallback
-
+    # Extract the content from all matches and strip leading/trailing whitespace
+    return [m[1].strip() for m in matches if m[1].strip()]
 
 def flatten_schema(schema: dict) -> dict:
     """
@@ -320,7 +303,7 @@ def call_node(
 
     llm_duration_s = round(time.monotonic() - t0, 3)
 
-    content = strip_code_fences(content)
+    content = extract_fenced_content(content)
 
     if not schema:
         return NodeResult(
